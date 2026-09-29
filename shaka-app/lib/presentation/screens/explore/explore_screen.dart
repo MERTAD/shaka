@@ -20,6 +20,7 @@ import '../../utils/tier_pill_painter.dart';
 import '../../widgets/score_tier_pill.dart';
 import '../../widgets/set_map_home_dialog.dart';
 import '../../widgets/save_spot_sheet.dart';
+import '../results/pfz_zones_screen.dart';
 
 /// Full-screen explore map for discovering dive spots.
 /// Surfline-style: Map 70% top, horizontal spot carousel 30% bottom.
@@ -1570,11 +1571,17 @@ class _ExploreScreenState extends State<ExploreScreen> {
     );
   }
 
-  /// Right floating buttons: My Spots (top) + Pin/Add spot (bottom)
+  /// Right floating buttons: Fishing targets (top) + My Spots + Pin/Add spot
   Widget _buildRightFloatingButtons() {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
+        // Offshore fishing targets (SatCatch-style polygons)
+        _buildFloatingButton(
+          icon: Icons.satellite_alt,
+          onTap: _openFishingTargets,
+        ),
+        const SizedBox(height: 8),
         // Saved spots button
         _buildFloatingButton(
           icon: Icons.bookmark_outline,
@@ -1588,6 +1595,24 @@ class _ExploreScreenState extends State<ExploreScreen> {
           onTap: _enterPinMode,
         ),
       ],
+    );
+  }
+
+  void _openFishingTargets() {
+    final center = _mapController?.cameraPosition?.target ?? _currentCenter ?? _defaultCenter;
+    // Copernicus NRT SST/SSTA/CHL lags ~1-2 days; latest available date is yesterday UTC.
+    final latest = DateTime.now().toUtc().subtract(const Duration(days: 1));
+    final date = '${latest.year.toString().padLeft(4, '0')}-'
+        '${latest.month.toString().padLeft(2, '0')}-'
+        '${latest.day.toString().padLeft(2, '0')}';
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => PfzZonesScreen(
+          lat: center.latitude,
+          lon: center.longitude,
+          date: date,
+        ),
+      ),
     );
   }
 

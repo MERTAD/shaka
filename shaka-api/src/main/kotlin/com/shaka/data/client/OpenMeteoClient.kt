@@ -118,7 +118,11 @@ class OpenMeteoClient {
                 rawSST = sst,
                 secondarySwellHeight = response.hourly.secondary_swell_wave_height?.getOrNull(idx),
                 secondarySwellDirection = response.hourly.secondary_swell_wave_direction?.getOrNull(idx)?.toInt(),
-                secondarySwellPeriod = response.hourly.secondary_swell_wave_period?.getOrNull(idx)
+                secondarySwellPeriod = response.hourly.secondary_swell_wave_period?.getOrNull(idx),
+                rawWaveHeightM = response.hourly.wave_height?.getOrNull(idx),
+                rawSwellHeightM = response.hourly.swell_wave_height?.getOrNull(idx),
+                rawSwellPeriodSec = response.hourly.swell_wave_period?.getOrNull(idx),
+                oceanCurrentVelocityKmh = response.hourly.ocean_current_velocity?.getOrNull(idx)
             )
         } catch (e: Exception) {
             logger.warn("Open-Meteo Marine API failed for ($lat, $lon): ${e.message}")
@@ -180,7 +184,7 @@ class OpenMeteoClient {
                 parameter("longitude", lon)
                 parameter("start_date", startDate)
                 parameter("end_date", endDate)
-                parameter("hourly", "wave_height,wave_period,wave_direction,swell_wave_height,swell_wave_period,swell_wave_direction,secondary_swell_wave_height,secondary_swell_wave_period,secondary_swell_wave_direction,sea_surface_temperature")
+                parameter("hourly", "wave_height,wave_period,wave_direction,swell_wave_height,swell_wave_period,swell_wave_direction,secondary_swell_wave_height,secondary_swell_wave_period,secondary_swell_wave_direction,ocean_current_velocity,sea_surface_temperature")
                 parameter("timezone", "auto")
             }.body()
             
@@ -201,7 +205,12 @@ class OpenMeteoClient {
                     swellPeriod = response.hourly.swell_wave_period?.getOrNull(idx) ?: 0.0,
                     secondarySwellHeight = response.hourly.secondary_swell_wave_height?.getOrNull(idx),
                     secondarySwellDirection = response.hourly.secondary_swell_wave_direction?.getOrNull(idx)?.toInt(),
-                    secondarySwellPeriod = response.hourly.secondary_swell_wave_period?.getOrNull(idx)
+                    secondarySwellPeriod = response.hourly.secondary_swell_wave_period?.getOrNull(idx),
+                    rawSST = response.hourly.sea_surface_temperature?.getOrNull(idx),
+                    rawWaveHeightM = response.hourly.wave_height?.getOrNull(idx),
+                    rawSwellHeightM = response.hourly.swell_wave_height?.getOrNull(idx),
+                    rawSwellPeriodSec = response.hourly.swell_wave_period?.getOrNull(idx),
+                    oceanCurrentVelocityKmh = response.hourly.ocean_current_velocity?.getOrNull(idx)
                 )
             }
         } catch (e: Exception) {

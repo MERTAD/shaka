@@ -262,7 +262,36 @@ data class OceanData(
     val rawSST: Double? = null,
     val secondarySwellHeight: Double? = null,
     val secondarySwellDirection: Int? = null,
-    val secondarySwellPeriod: Double? = null
+    val secondarySwellPeriod: Double? = null,
+
+    // ---------------------------------------------------------------
+    // HONEST MEASUREMENTS
+    //
+    // The legacy fields above (waveHeight, wavePeriod, swellHeight, ...) are
+    // non-null because the long-standing SoCal pipeline reads them directly in
+    // ~40 call sites, and changing their type is a separate refactor. They
+    // still carry historical fallback defaults (1.0 m wave, 0.5 m swell, ...)
+    // applied by OpenMeteoClient when the upstream value is absent.
+    //
+    // Those defaults are fine for a qualitative "is it rough?" UI string, but
+    // they are NOT acceptable as evidence in a habitat model: a fabricated
+    // 0.5 m swell would read as a perfect, calm sea to a species profile.
+    //
+    // The fields below carry the true upstream value or null. Anything doing
+    // evidence-based scoring (currently com.shaka.pfz) MUST use these and must
+    // treat null as "unknown", never as a default.
+    val rawWaveHeightM: Double? = null,
+    val rawSwellHeightM: Double? = null,
+    val rawSwellPeriodSec: Double? = null,
+
+    /**
+     * Ocean surface current speed in km/h.
+     *
+     * Open-Meteo's `ocean_current_velocity` was requested on the single-date
+     * marine path but never mapped, and was not requested at all on the
+     * date-range path, so this was structurally always null.
+     */
+    val oceanCurrentVelocityKmh: Double? = null
 )
 
 @Serializable

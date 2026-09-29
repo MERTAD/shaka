@@ -1,0 +1,688 @@
+package com.shaka.pfz
+
+import com.shaka.data.client.BathymetryClient
+import com.shaka.data.client.CopernicusField
+import com.shaka.data.client.CopernicusGrid
+import com.shaka.data.client.CopernicusGridClient
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withTimeoutOrNull
+import java.time.LocalDate
+import java.time.temporal.ChronoUnit
+import kotlin.math.PI
+import kotlin.math.abs
+import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.sqrt
+
+/**
+ * Spatial analysis behind the PFZ front-finder.
+ *
+ * Every analysis is produced from real [CopernicusGrid]s fetched through a
+ * [PfzGridSource]. It computes, for one spot and date:
+ *  - the strongest SST and chlorophyll gradients inside the box (°C/km, mg/m3/km),
+ *  - whether those gradients cross the front detection thresholds ([PfzFactors]
+ *    SST_FRONT_C_PER_KM / CHL_FRONT_MG_M3_PER_KM) and, when they do, the
+ *    distance from the spot to the nearest front cell and the SST/CHL
+ *    coincidence tier,
+ *  - the SST anomaly at the spot cell,
+ *  - the bathymetric slope from a centre + N/E/S/W probe pattern.
+ *
+ * Honesty contract: a grid that fails to fetch contributes null, never a
+ * guess. A timeout on the whole analysis yields a fully-null [PfzSpatialGrid]
+ * and the caller reports the corridor factors as missing.
+ */
+class PfzGridService(
+    private val source: PfzGridSource = CopernicusGridSource()
+) {
+    suspend fun analyze(lat: Double, lon: Double, date: LocalDate): PfzSpatialGrid =
+        withTimeoutOrNull(ANALYZE_TIMEOUT_MS) {
+            val (sstGrid, sstaGrid, chlGrid) = coroutineScope {
+                val sst = async { source.fetchGrid(CopernicusField.SST, lat, lon, date) }
+                val ssta = async { source.fetchGrid(CopernicusField.SSTA, lat, lon, date) }
+                val chl = async { source.fetchGrid(CopernicusField.CHL, lat, lon, date) }
+                Triple(sst.await(), ssta.await(), chl.await())
+            }
+
+            val offsets = listOf(
+                0.0 to 0.0,
+                0.05 to 0.0, -0.05 to 0.0,
+                0.0 to 0.05, 0.0 to -0.05
+            )
+            val probes = coroutineScope {
+                offsets.map { (dLat, dLon) ->
+                    async {
+                        val pLat = lat + dLat
+                        val pLon = lon + dLon
+                        DepthProbe(pLat, pLon, source.depthM(pLat, pLon))
+                    }
+                }.awaitAll()
+            }
+
+            val sstEdges = sstGrid?.let { edgeGradients(it) }
+            val chlEdges = chlGrid?.let { edgeGradients(it) }
+
+            val sstGradient = sstEdges?.maxOfOrNull { it.magCPerKm }
+            val chlGradient = chlEdges?.maxOfOrNull { it.magPerKm }
+
+            val sstFront = sstEdges != null && (sstGradient ?: 0.0) >= PfzFactors.SST_FRONT_C_PER_KM
+            val chlFront = chlEdges != null &&
+                (chlGradient ?: 0.0) >= PfzFactors.CHL_FRONT_MG_M3_PER_KM
+
+            val coincidence = when {
+                sstGrid == null && chlGrid == null -> null
+                sstFront && chlFront -> FrontCoincidence.COINCIDENT
+                sstFront -> FrontCoincidence.SST_ONLY
+                chlFront -> FrontCoincidence.CHL_ONLY
+                else -> FrontCoincidence.NONE
+            }
+
+            val frontKm = when {
+                sstFront -> nearestFrontKm(sstEdges!!.filter { it.magCPerKm >= PfzFactors.SST_FRONT_C_PER_KM }, lat, lon)
+                chlFront -> nearestFrontKm(chlEdges!!.filter { it.magPerKm >= PfzFactors.CHL_FRONT_MG_M3_PER_KM }, lat, lon)
+                else -> null
+            }
+
+            PfzSpatialGrid(
+                sstGradientCkm = sstGradient,
+                chlaGradientMgM3km = chlGradient,
+                sstAnomalyC = sstaGrid?.let { nearestCellValue(it, lat, lon) },
+                depthGradientMperKm = depthGradientMperKm(probes),
+                frontKm = frontKm,
+                frontCoincidence = coincidence,
+                dataDate = sstGrid?.dataDate ?: sstaGrid?.dataDate ?: chlGrid?.dataDate
+            )
+        } ?: PfzSpatialGrid.missing()
+
+    /**
+     * Zone analysis: partition the resolved box into candidate fishing zones
+     * and produce, for each, the corridor fields plus a polygon.
+     *
+     * A zone is one *connected patch* of the box-cell lattice sharing the same
+     * thermal-core class (positive/negative/neutral/unknown SST anomaly),
+     * split where a detected front edge crosses the lattice. Front edges are
+     * hard patch boundaries; the front *tier* itself is kept for scoring, not
+     * fencing, so a near-threshold wobble shrinks a patch's score instead of
+     * shredding the shape. The polygon is that patch's outline, so its shape
+     * follows the resolved oceanographic structure instead of a fixed grid
+     * stride. Meteo (wind/swell) and gridded bathymetry are not available for
+     * arbitrary cells, so they neither shape the patch nor are silently
+     * guessed; depth is still a single-point reading at a sample cell inside
+     * each zone.
+     *
+     * At most [MAX_ZONES] patches are returned, the strongest by gradient
+     * magnitude then size. Ranking by species is the caller's job (it needs the
+     * profile); this returns every chosen patch with its measured corridor,
+     * honestly null where the grid could not resolve.
+     */
+    suspend fun analyzeZones(lat: Double, lon: Double, requested: LocalDate): List<PfzZoneDatum> =
+        withTimeoutOrNull(ANALYZE_TIMEOUT_MS) {
+            val (sstGrid, sstaGrid, chlGrid) = coroutineScope {
+                val sst = async { source.fetchGrid(CopernicusField.SST, lat, lon, requested) }
+                val ssta = async { source.fetchGrid(CopernicusField.SSTA, lat, lon, requested) }
+                val chl = async { source.fetchGrid(CopernicusField.CHL, lat, lon, requested) }
+                Triple(sst.await(), ssta.await(), chl.await())
+            }
+
+            val anchor = sstGrid ?: chlGrid ?: sstaGrid ?: return@withTimeoutOrNull emptyList()
+            val sstEdges = sstGrid?.let { edgeGradients(it) }
+            val chlEdges = chlGrid?.let { edgeGradients(it) }
+            val analyzed = anchor.dataDate
+            val forecastDay = analyzed?.let {
+                ChronoUnit.DAYS.between(it, requested).toInt().coerceAtLeast(0)
+            } ?: 0
+
+            val cells = buildList<Cell> {
+                for (i in 0 until anchor.lats.size - 1) {
+                    for (j in 0 until anchor.lons.size - 1) {
+                        add(
+                            Cell(
+                                i = i,
+                                j = j,
+                                lat = (anchor.lats[i] + anchor.lats[i + 1]) / 2,
+                                lon = (anchor.lons[j] + anchor.lons[j + 1]) / 2
+                            )
+                        )
+                    }
+                }
+            }
+            if (cells.isEmpty()) return@withTimeoutOrNull emptyList()
+
+            val signatures = cells.associateWith { cellSignature(it, sstEdges, chlEdges, sstaGrid) }
+            val cellMag = cells.associateWith {
+                maxOf(
+                    nearestEdgeMag(sstEdges, it.lat, it.lon) ?: 0.0,
+                    nearestEdgeMag(chlEdges, it.lat, it.lon) ?: 0.0
+                )
+            }
+            val latBarriers = barrierAtLat(anchor.lats, sstGrid, chlGrid)
+            val lonBarriers = barrierAtLon(anchor.lons, sstGrid, chlGrid)
+            val patches = connectedPatches(cells, signatures, cellMag, latBarriers, lonBarriers)
+
+            patches
+                .sortedWith(
+                    compareByDescending<Patch> { it.maxGradient }
+                        .thenByDescending { it.cells.size }
+                        .thenBy { it.cells.minOf { c -> c.lat } }
+                )
+                .take(MAX_ZONES)
+                .map { patch ->
+                    val centroidLat = patch.cells.map { it.lat }.average()
+                    val centroidLon = patch.cells.map { it.lon }.average()
+                    val representative = patch.cells.minByOrNull {
+                        approxKm(centroidLat, centroidLon, it.lat, it.lon)
+                    }!!
+                    val (outer, holes) = polygonOf(patch.cells, anchor.lats, anchor.lons)
+                    zoneDatum(
+                        representative.lat, representative.lon,
+                        sstEdges, chlEdges, sstaGrid, analyzed, forecastDay
+                    ).copy(
+                        lat = centroidLat,
+                        lon = centroidLon,
+                        polygon = outer,
+                        holes = holes
+                    )
+                }
+        } ?: emptyList()
+
+    // ---------------------------------------------------------------- maths
+
+    /** Which thermal-core band a cell belongs to for patch fencing. */
+    private enum class AnomalyBand { POS, NEG, NEUTRAL, UNKNOWN }
+
+    private data class Cell(val i: Int, val j: Int, val lat: Double, val lon: Double)
+
+    private data class Patch(val cells: Set<Cell>, val maxGradient: Double)
+
+    private data class GridPoint(val r: Int, val c: Int)
+
+    /**
+     * The thermal-core signature that decides patch membership. Fronts cut on
+     * the barrier edges below; only the anomaly band fences here, because the
+     * coincidence tier wobbles at the gradient threshold and would shred the
+     * shape into single-cell speckle.
+     */
+    private fun cellSignature(
+        cell: Cell,
+        sstEdges: List<EdgeGradient>?,
+        chlEdges: List<EdgeGradient>?,
+        sstaGrid: CopernicusGrid?
+    ): AnomalyBand {
+        val anomaly = sstaGrid?.let { nearestCellValue(it, cell.lat, cell.lon) }
+        return when {
+            anomaly == null -> AnomalyBand.UNKNOWN
+            anomaly >= ANOMALY_CORE_C -> AnomalyBand.POS
+            anomaly <= -ANOMALY_CORE_C -> AnomalyBand.NEG
+            else -> AnomalyBand.NEUTRAL
+        }
+    }
+
+    /**
+     * Boundary fences for the anchor lattice: an anchor row band becomes a
+     * hard patch boundary when a *decisive* front (over the barrier
+     * thresholds, which are stronger than the front-detection thresholds used
+     * for scoring) crosses it in the SST or CHL grid. A detected front still
+     * moves the score; only an unambiguous frontal core is a hard patch
+     * boundary, otherwise per-cell gradient wobble near the detection threshold
+     * would shred every polygon into single-cell speckle.
+     *
+     * Each grid is evaluated on its own lattice and routed onto the anchor
+     * bands by latitude, because the products resolve at different spacings
+     * and footprints (SST/SSTA 1/120 deg, CHL ~1 km) and never share row
+     * indices.
+     */
+    private fun barrierAtLat(
+        lats: List<Double>,
+        sst: CopernicusGrid?,
+        chl: CopernicusGrid?
+    ): List<Boolean> {
+        val out = MutableList((lats.size - 1).coerceAtLeast(0)) { false }
+        sst?.let { fenceAtLat(it, out, lats, BARRIER_SST_FRONT_C_PER_KM) }
+        chl?.let { fenceAtLat(it, out, lats, BARRIER_CHL_FRONT_MG_M3_PER_KM) }
+        return out
+    }
+
+    private fun fenceAtLat(
+        g: CopernicusGrid,
+        out: MutableList<Boolean>,
+        anchorLats: List<Double>,
+        threshold: Double
+    ) {
+        for (i in 1 until g.lats.size) {
+            val dLatKm = (g.lats[i] - g.lats[i - 1]) * KM_PER_DEG_LAT
+            if (dLatKm <= 0.0) continue
+            val front = (0 until g.lons.size).any { j ->
+                val a = g.values[i][j]
+                val b = g.values[i - 1][j]
+                !a.isNaN() && !b.isNaN() && abs(a - b) / dLatKm >= threshold
+            }
+            if (!front) continue
+            val midLat = (g.lats[i - 1] + g.lats[i]) / 2
+            val r = bandIndexOf(anchorLats, midLat)
+            if (r in out.indices) out[r] = true
+        }
+    }
+
+    /** Longitude twin of [barrierAtLat] (cos-latitude corrected). */
+    private fun barrierAtLon(
+        lons: List<Double>,
+        sst: CopernicusGrid?,
+        chl: CopernicusGrid?
+    ): List<Boolean> {
+        val out = MutableList((lons.size - 1).coerceAtLeast(0)) { false }
+        sst?.let { fenceAtLon(it, out, lons, BARRIER_SST_FRONT_C_PER_KM) }
+        chl?.let { fenceAtLon(it, out, lons, BARRIER_CHL_FRONT_MG_M3_PER_KM) }
+        return out
+    }
+
+    private fun fenceAtLon(
+        g: CopernicusGrid,
+        out: MutableList<Boolean>,
+        anchorLons: List<Double>,
+        threshold: Double
+    ) {
+        for (c in 1 until g.lons.size) {
+            val front = (0 until g.lats.size).any { i ->
+                val a = g.values[i][c]
+                val b = g.values[i][c - 1]
+                if (a.isNaN() || b.isNaN()) false
+                else {
+                    val cosLat = cos(PI * g.lats[i] / 180.0)
+                    val dLonKm = (g.lons[c] - g.lons[c - 1]) * KM_PER_DEG_LON * cosLat
+                    dLonKm > 0.0 && abs(a - b) / dLonKm >= threshold
+                }
+            }
+            if (!front) continue
+            val midLon = (g.lons[c - 1] + g.lons[c]) / 2
+            val r = bandIndexOf(anchorLons, midLon)
+            if (r in out.indices) out[r] = true
+        }
+    }
+
+    /** Anchor band index whose span [values[r], values[r + 1]] contains [mid]. */
+    private fun bandIndexOf(values: List<Double>, mid: Double): Int {
+        for (r in 0 until values.size - 1) {
+            val lo = minOf(values[r], values[r + 1])
+            val hi = maxOf(values[r], values[r + 1])
+            if (mid >= lo && mid <= hi) return r
+        }
+        return -1
+    }
+
+    /**
+     * Flood-fill the lattice into 4-connected patches of cells with the same
+     * [CellSignature], never crossing a front-lattice barrier.
+     */
+    private fun connectedPatches(
+        cells: List<Cell>,
+        signatures: Map<Cell, AnomalyBand>,
+        cellMag: Map<Cell, Double>,
+        latBarriers: List<Boolean>,
+        lonBarriers: List<Boolean>
+    ): List<Patch> {
+        val byIndex = cells.associateBy { it.i to it.j }
+        val visited = mutableSetOf<Cell>()
+        val patches = mutableListOf<Patch>()
+
+        for (start in cells.sortedWith(compareBy({ it.i }, { it.j }))) {
+            if (start in visited) continue
+            val queue = ArrayDeque<Cell>().apply { addLast(start) }
+            visited += start
+            val members = linkedSetOf(start)
+            while (queue.isNotEmpty()) {
+                val c = queue.removeFirst()
+                val sig = signatures.getValue(c)
+                val neighbors = buildList {
+                    // North: shares the lat boundary between rows c.i and c.i+1.
+                    byIndex[c.i + 1 to c.j]?.takeIf { !latBarriers.getOrElse(c.i) { true } }?.let(::add)
+                    // South: shares the lat boundary between rows c.i-1 and c.i.
+                    byIndex[c.i - 1 to c.j]?.takeIf { c.i - 1 >= 0 && !latBarriers.getOrElse(c.i - 1) { true } }?.let(::add)
+                    // East: shares the lon boundary between cols c.j and c.j+1.
+                    byIndex[c.i to c.j + 1]?.takeIf { !lonBarriers.getOrElse(c.j) { true } }?.let(::add)
+                    // West: shares the lon boundary between cols c.j-1 and c.j.
+                    byIndex[c.i to c.j - 1]?.takeIf { c.j - 1 >= 0 && !lonBarriers.getOrElse(c.j - 1) { true } }?.let(::add)
+                }
+                for (n in neighbors) {
+                    if (n in members || n in visited) continue
+                    if (signatures.getValue(n) == sig) {
+                        queue.addLast(n)
+                        members += n
+                        visited += n
+                    }
+                }
+            }
+            patches += Patch(members, members.maxOf { cellMag.getValue(it) })
+        }
+        return patches
+    }
+
+    /**
+     * Outline of a patch as outer ring + interior rings. The ring points are
+     * lattice corners, so a patch spanning an entire front-free box outlines
+     * exactly its real extent; a hole in the patch becomes its own ring.
+     */
+    private fun polygonOf(
+        patch: Set<Cell>,
+        lats: List<Double>,
+        lons: List<Double>
+    ): Pair<List<PfzPoint>, List<List<PfzPoint>>> {
+        val member = patch.mapTo(java.util.LinkedHashSet()) { it.i to it.j }
+        fun inPatch(i: Int, j: Int): Boolean =
+            i >= 0 && j >= 0 && i < lats.size - 1 && j < lons.size - 1 && (i to j) in member
+
+        val edges = mutableListOf<Pair<GridPoint, GridPoint>>()
+        for (ll in 0 until lats.size) {
+            for (c in 0 until lons.size - 1) {
+                if (inPatch(ll - 1, c) != inPatch(ll, c)) {
+                    edges += GridPoint(ll, c) to GridPoint(ll, c + 1)
+                }
+            }
+        }
+        for (lc in 0 until lons.size) {
+            for (i in 0 until lats.size - 1) {
+                if (inPatch(i, lc - 1) != inPatch(i, lc)) {
+                    edges += GridPoint(i, lc) to GridPoint(i + 1, lc)
+                }
+            }
+        }
+
+        val rings = traceRings(edges).sortedByDescending { it.size }
+        if (rings.isEmpty()) return emptyList<PfzPoint>() to emptyList<List<PfzPoint>>()
+        val outer = rings.first().map { PfzPoint(lats[it.r], lons[it.c]) }
+        val holes = rings.drop(1).map { ring -> ring.map { PfzPoint(lats[it.r], lons[it.c]) } }
+        return outer to holes
+    }
+
+    /**
+     * Close the boundary-edge graph into simple rings by left-wall walking: at
+     * each lattice point keep the patch on the left (smallest counter-clockwise
+     * turn from the arrival direction), which traces an exterior ring or a hole
+     * ring without crossing.
+     */
+    private fun traceRings(edges: List<Pair<GridPoint, GridPoint>>): List<List<GridPoint>> {
+        if (edges.isEmpty()) return emptyList()
+        val adj = mutableMapOf<GridPoint, MutableList<GridPoint>>()
+        for ((a, b) in edges) {
+            adj.getOrPut(a) { mutableListOf() }.add(b)
+            adj.getOrPut(b) { mutableListOf() }.add(a)
+        }
+        val used = mutableSetOf<Pair<GridPoint, GridPoint>>()
+        val rings = mutableListOf<List<GridPoint>>()
+
+        for ((a, b) in edges) {
+            if (a to b in used || b to a in used) continue
+            val ring = mutableListOf(a, b)
+            used += a to b
+            var prev = a
+            var cur = b
+            var guard = 0
+            while (cur != a) {
+                val candidates = adj[cur].orEmpty().filter { it != prev && (cur to it) !in used }
+                if (candidates.isEmpty()) return rings
+                val next = pickLeftmost(prev, cur, candidates)
+                used += cur to next
+                ring += next
+                prev = cur
+                cur = next
+                if (++guard > edges.size * 2) return rings
+            }
+            rings += ring
+        }
+        return rings
+    }
+
+    /** Among boundary candidates at a point, take the tightest left (CCW) turn. */
+    private fun pickLeftmost(
+        prev: GridPoint,
+        cur: GridPoint,
+        candidates: List<GridPoint>
+    ): GridPoint {
+        val dr = cur.r - prev.r
+        val dc = cur.c - prev.c
+        return candidates.minByOrNull { n ->
+            val nr = n.r - cur.r
+            val nc = n.c - cur.c
+            val angle = Math.toDegrees(atan2((dr * nc - dc * nr).toDouble(), (dr * nr + dc * nc).toDouble()))
+            if (angle < 0.0) angle + 360.0 else angle
+        }!!
+    }
+
+    /** Corridor fields for one zone centre. */
+    private suspend fun zoneDatum(
+        lat: Double,
+        lon: Double,
+        sstEdges: List<EdgeGradient>?,
+        chlEdges: List<EdgeGradient>?,
+        sstaGrid: CopernicusGrid?,
+        dataDate: LocalDate?,
+        forecastDay: Int
+    ): PfzZoneDatum {
+        val sstGradient = nearestEdgeMag(sstEdges, lat, lon)
+        val chlGradient = nearestEdgeMag(chlEdges, lat, lon)
+
+        val sstFront = sstEdges != null && (sstGradient ?: 0.0) >= PfzFactors.SST_FRONT_C_PER_KM
+        val chlFront = chlEdges != null && (chlGradient ?: 0.0) >= PfzFactors.CHL_FRONT_MG_M3_PER_KM
+        val coincidence = when {
+            sstEdges == null && chlEdges == null -> null
+            sstFront && chlFront -> FrontCoincidence.COINCIDENT
+            sstFront -> FrontCoincidence.SST_ONLY
+            chlFront -> FrontCoincidence.CHL_ONLY
+            else -> FrontCoincidence.NONE
+        }
+
+        val frontEdges = buildList {
+            sstEdges?.filter { it.magPerKm >= PfzFactors.SST_FRONT_C_PER_KM }?.let { addAll(it) }
+            chlEdges?.filter { it.magPerKm >= PfzFactors.CHL_FRONT_MG_M3_PER_KM }?.let { addAll(it) }
+        }
+        val frontKm = frontEdges.minOfOrNull { approxKm(lat, lon, it.latMid, it.lonMid) }
+
+        return PfzZoneDatum(
+            lat = lat,
+            lon = lon,
+            sstGradientCkm = sstGradient,
+            chlaGradientMgM3km = chlGradient,
+            sstAnomalyC = sstaGrid?.let { nearestCellValue(it, lat, lon) },
+            depthM = source.depthM(lat, lon),
+            depthGradientMperKm = null,
+            frontKm = frontKm,
+            frontCoincidence = coincidence,
+            dataDate = dataDate,
+            forecastDay = forecastDay
+        )
+    }
+
+    /** Strongest gradient at the edge cell closest to (lat, lon). */
+    private fun nearestEdgeMag(edges: List<EdgeGradient>?, lat: Double, lon: Double): Double? {
+        if (edges.isNullOrEmpty()) return null
+        return edges.minBy { approxKm(lat, lon, it.latMid, it.lonMid) }.magPerKm
+    }
+
+    /** Per-cell edge gradient magnitude in natural units per km. */
+    private fun edgeGradients(grid: CopernicusGrid): List<EdgeGradient> {
+        val out = mutableListOf<EdgeGradient>()
+        for (i in 1 until grid.lats.size) {
+            val dLatKm = (grid.lats[i] - grid.lats[i - 1]) * KM_PER_DEG_LAT
+            val latRad = PI * grid.lats[i] / 180.0
+            for (j in 1 until grid.lons.size) {
+                val dLonKm = (grid.lons[j] - grid.lons[j - 1]) * KM_PER_DEG_LON * cos(latRad)
+                if (dLonKm <= 0.0) continue
+
+                val dLatVal = grid.values[i][j] - grid.values[i - 1][j]
+                val dLonVal = grid.values[i][j] - grid.values[i][j - 1]
+                if (dLatVal.isNaN() || dLonVal.isNaN()) continue
+
+                val mag = sqrt(
+                    (dLatVal / dLatKm) * (dLatVal / dLatKm) +
+                        (dLonVal / dLonKm) * (dLonVal / dLonKm)
+                )
+                // Emit zero-gradient edges too: a grid that resolved but is flat
+                // is a measured "no front", not an unknown.
+                out += EdgeGradient(
+                    magCPerKm = mag,
+                    magPerKm = mag,
+                    latMid = (grid.lats[i] + grid.lats[i - 1]) / 2,
+                    lonMid = (grid.lons[j] + grid.lons[j - 1]) / 2
+                )
+            }
+        }
+        return out
+    }
+
+    private fun nearestFrontKm(frontEdges: List<EdgeGradient>, lat: Double, lon: Double): Double =
+        frontEdges.minOf { approxKm(lat, lon, it.latMid, it.lonMid) }
+
+    private fun nearestCellValue(grid: CopernicusGrid, lat: Double, lon: Double): Double? {
+        val cosLat = cos(PI * lat / 180.0)
+        var bestI = -1
+        var bestJ = -1
+        var best = Double.MAX_VALUE
+        for (i in grid.lats.indices) {
+            val dLat = grid.lats[i] - lat
+            for (j in grid.lons.indices) {
+                val dLon = (grid.lons[j] - lon) * cosLat
+                val d = dLat * dLat + dLon * dLon
+                if (d < best) {
+                    best = d
+                    bestI = i
+                    bestJ = j
+                }
+            }
+        }
+        val v = grid.values[bestI][bestJ]
+        return if (v.isNaN()) null else v
+    }
+
+    private fun depthGradientMperKm(probes: List<DepthProbe>): Double? {
+        val center = probes.firstOrNull() ?: return null
+        val centerDepth = center.depthM ?: return null
+        var maxSlope = 0.0
+        for (p in probes.drop(1)) {
+            val depth = p.depthM ?: continue
+            val distanceKm = approxKm(center.lat, center.lon, p.lat, p.lon)
+            if (distanceKm <= 0.0) continue
+            val slope = abs(depth - centerDepth) / distanceKm
+            if (slope > maxSlope) maxSlope = slope
+        }
+        return if (maxSlope > 0.0) maxSlope else null
+    }
+
+    /** Equirectangular approximation, fine for the sub-10 km probes and boxes here. */
+    private fun approxKm(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+        val dLat = lat2 - lat1
+        val dLon = lon2 - lon1
+        val latMidRad = PI * (lat1 + lat2) / 360.0
+        val x = dLon * KM_PER_DEG_LON * cos(latMidRad)
+        val y = dLat * KM_PER_DEG_LAT
+        return sqrt(x * x + y * y)
+    }
+
+    private data class EdgeGradient(
+        val magCPerKm: Double,
+        val magPerKm: Double,
+        val latMid: Double,
+        val lonMid: Double
+    )
+
+    private data class DepthProbe(val lat: Double, val lon: Double, val depthM: Double?)
+
+    companion object {
+        private const val KM_PER_DEG_LAT = 110.574
+        private const val KM_PER_DEG_LON = 111.320
+        private const val ANALYZE_TIMEOUT_MS = 120_000L
+
+        /** SST anomaly magnitude (C) that counts as a warm/cool core. */
+        private const val ANOMALY_CORE_C = 0.5
+
+        /**
+         * Barrier thresholds carve patch boundaries. They sit well above the
+         * front-detection thresholds ([PfzFactors]) so shallow gradients still
+         * score but do not shred the geometry into single-cell speckle.
+         */
+        private const val BARRIER_SST_FRONT_C_PER_KM = 0.25
+        private const val BARRIER_CHL_FRONT_MG_M3_PER_KM = 0.25
+
+        /** Cap on ranked candidate zones per request (bounds bathymetry calls). */
+        const val MAX_ZONES = 24
+    }
+}
+
+/**
+ * One candidate zone of [PfzGridService.analyzeZones]: the corridor fields of
+ * one resolved habitat patch. Every nullable is "the grid could not resolve
+ * this here", which the engine turns into a named missing factor.
+ */
+data class PfzZoneDatum(
+    /** Patch centroid — the map centre of the polygon. */
+    val lat: Double,
+    val lon: Double,
+    val sstGradientCkm: Double?,
+    val chlaGradientMgM3km: Double?,
+    val sstAnomalyC: Double?,
+    val depthM: Double?,
+    val depthGradientMperKm: Double?,
+    val frontKm: Double?,
+    val frontCoincidence: FrontCoincidence?,
+    val dataDate: LocalDate?,
+    val forecastDay: Int,
+    /** Outer ring of the patch. Closed (first point == last point). */
+    val polygon: List<PfzPoint> = emptyList(),
+    /** Interior rings of [polygon] (holes). */
+    val holes: List<List<PfzPoint>> = emptyList()
+)
+
+/**
+ * What an analysis found (or, honestly, could not find) around one spot.
+ * Every nullable is "the grid/field did not resolve", never a defaulted guess.
+ */
+data class PfzSpatialGrid(
+    val sstGradientCkm: Double?,
+    val chlaGradientMgM3km: Double?,
+    val sstAnomalyC: Double?,
+    val depthGradientMperKm: Double?,
+    val frontKm: Double?,
+    val frontCoincidence: FrontCoincidence?,
+    val dataDate: LocalDate?
+) {
+    companion object {
+        fun missing(): PfzSpatialGrid =
+            PfzSpatialGrid(null, null, null, null, null, null, null)
+    }
+}
+
+/**
+ * Pluggable access to the ocean/data grids the analysis consumes.
+ *
+ * This seam is what makes [PfzGridService] testable without touching the real
+ * Copernicus toolbox or the bathy services.
+ */
+interface PfzGridSource {
+    suspend fun fetchGrid(
+        field: CopernicusField,
+        lat: Double,
+        lon: Double,
+        date: LocalDate
+    ): CopernicusGrid?
+
+    /** Single-point bathymetric depth at (lat, lon), or null. */
+    suspend fun depthM(lat: Double, lon: Double): Double?
+}
+
+/**
+ * Production [PfzGridSource]: Copernicus Marine Toolbox grids for SST/SSTA/CHL
+ * and NCEI-DEM/GEBCO bathymetry for the depth probes.
+ */
+class CopernicusGridSource(
+    private val grid: CopernicusGridClient = CopernicusGridClient(),
+    private val bathymetry: BathymetryClient = BathymetryClient()
+) : PfzGridSource {
+    override suspend fun fetchGrid(
+        field: CopernicusField,
+        lat: Double,
+        lon: Double,
+        date: LocalDate
+    ): CopernicusGrid? = grid.fetchGrid(field, lat, lon, date = date)
+
+    override suspend fun depthM(lat: Double, lon: Double): Double? =
+        bathymetry.fetchDepthOnly(lat, lon)?.depthM
+}

@@ -8,6 +8,7 @@ import '../../../data/models/spot_models.dart';
 import '../../bloc/search_bloc.dart';
 import '../../widgets/spot_card.dart';
 import 'map_view.dart';
+import 'pfz_zones_screen.dart';
 
 class ResultsScreen extends StatefulWidget {
   final double lat;
@@ -87,6 +88,22 @@ class _ResultsScreenState extends State<ResultsScreen> {
           ],
         ),
         actions: [
+          IconButton(
+            tooltip: 'Offshore fishing targets',
+            onPressed: () {
+              HapticFeedback.lightImpact();
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => PfzZonesScreen(
+                    lat: widget.lat,
+                    lon: widget.lon,
+                    date: widget.date,
+                  ),
+                ),
+              );
+            },
+            icon: const Icon(Icons.satellite_alt),
+          ),
           TextButton(
             onPressed: () {
               HapticFeedback.lightImpact();

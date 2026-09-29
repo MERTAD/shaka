@@ -7,9 +7,11 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../data/api/shaka_api_client.dart';
 import '../../../data/models/spot_models.dart';
+import '../../../data/models/pfz_models.dart';
 import '../../../data/services/live_wind_service.dart';
 import '../../bloc/search_bloc.dart';
 import '../../widgets/conditions_card.dart';
+import '../../widgets/pfz_card.dart';
 import '../../widgets/live_wind_value.dart';
 import '../../widgets/satellite_readings_card.dart';
 import '../../widgets/swell_details_card.dart';
@@ -73,6 +75,13 @@ class _SpotDetailScreenState extends State<SpotDetailScreen>
   SpotTideRangeResponse? _tideRange;
   bool _tideRangeLoading = false;
   int _selectedForecastIndex = 0;
+
+  // Species-specific PFZ verdicts. Lazy-loaded after paint for the same reason
+  // as live wind: it must never delay the detail view. Skipped for user spots
+  // because the endpoint resolves curated spots only.
+  PfzResponse? _pfz;
+  bool _pfzLoading = false;
+  String? _pfzError;
 
   /// Cache id used by the hourly/tide chart endpoints (user spots are prefixed).
   String get _cacheId =>
@@ -258,6 +267,36 @@ class _SpotDetailScreenState extends State<SpotDetailScreen>
           _tideRange = const SpotTideRangeResponse(
               spotId: '', timezoneId: null, days: []);
           _tideRangeLoading = false;
+        });
+      }
+    }
+  }
+
+  /// Lazy-load species-specific PFZ verdicts for this spot and date.
+  ///
+  /// A 404 (unknown/curated-only spot) is a normal outcome, not an error: the
+  /// card simply does not render. Any other failure surfaces as text so the
+  /// angler can tell "we don't know" apart from "it's bad".
+  Future<void> _loadPfz() async {
+    if (_pfz != null || _pfzLoading || _pfzError != null) return;
+    if (widget.isUserSpot) return; // endpoint resolves curated spots only
+    setState(() => _pfzLoading = true);
+    try {
+      final data = await _apiClient.getPfz(
+        spotId: widget.spotId,
+        date: widget.date,
+      );
+      if (mounted) {
+        setState(() {
+          _pfz = data;
+          _pfzLoading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _pfzError = 'Could not reach the scoring service.';
+          _pfzLoading = false;
         });
       }
     }
@@ -466,6 +505,10 @@ class _SpotDetailScreenState extends State<SpotDetailScreen>
     // Kick off the hourly swell/wind fetch on first view (used by both tabs).
     if (_hourly == null && !_hourlyLoading) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _loadHourly());
+    }
+    // Species scoring is secondary to conditions, so it loads after paint too.
+    if (_pfz == null && !_pfzLoading && _pfzError == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _loadPfz());
     }
     final todayHourly = _todayHourly;
     return ListView(
@@ -1485,6 +1528,10 @@ class _SpotDetailScreenState extends State<SpotDetailScreen>
                 utcOffsetMinutes: _hourly?.utcOffsetMinutes,
                 timezoneAbbr: _hourly?.timezoneAbbr,
               ),
+              if (_pfz != null || _pfzLoading || _pfzError != null) ...[
+                const SizedBox(height: 20),
+                PfzCard(pfz: _pfz, loading: _pfzLoading, error: _pfzError),
+              ],
               const SizedBox(height: 20),
               // Swell details (expandable)
               _buildSectionHeader('SWELL & WIND'),

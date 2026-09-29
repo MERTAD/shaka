@@ -20,6 +20,9 @@ import com.shaka.fishing_intel.processing.SpeciesNormalizer
 import com.shaka.fishing_intel.processing.SoCalGazetteer
 import com.shaka.fishing_intel.models.*
 import com.shaka.PrefetchJobsKey
+import com.shaka.pfz.PfzGridService
+import com.shaka.pfz.PfzService
+import com.shaka.pfz.PfzSpeciesRegistry
 import com.shaka.service.SpotService
 import com.shaka.service.ForecastService
 import com.shaka.service.HealthService
@@ -66,6 +69,7 @@ private suspend fun io.ktor.server.application.ApplicationCall.respondWithDeadli
 
 fun Application.configureRouting() {
     val spotService = SpotService()
+    val pfzService = PfzService(gridSource = PfzGridService())
     val forecastService = ForecastService()
     val copernicusClient = CopernicusClient()
     val healthService = HealthService()
@@ -459,6 +463,80 @@ fun Application.configureRouting() {
                     call.respond(wind)
                 } else {
                     call.respond(HttpStatusCode.NotFound, mapOf("error" to "Live wind not available"))
+                }
+            }
+
+            /**
+             * Species-specific Potential Fishing Zone for a spot and date.
+             *
+             * This is NOT a replacement for /spots/{id}; it is the habitat
+             * question that endpoint cannot answer. /spots/{id} returns one
+             * generic score, while this returns a separate verdict per species
+             * with its own gates, weights, evidence provenance and confidence.
+             *
+             * Contract with the client: `pfz` is null unless `status` is
+             * "scoreable". "unavailable" means the species is outside its
+             * documented habitat here, NOT that it scored badly. Render the
+             * `blockers` and `coverageNotes` rather than showing 0.
+             *
+             * Reads SpotDataCache and, when a grid corridor is configured,
+             * enriches the observation with the Copernicus Med SST/SSTA/CHL
+             * front analysis. Upstream failures are time-bounded and breakered,
+             * and surface as named missing factors — never as invented fronts.
+             */
+            get("/spots/{id}/pfz") {
+                val spotId = call.parameters["id"]
+                    ?: return@get call.respond(HttpStatusCode.BadRequest, mapOf("error" to "id required"))
+                val date = call.parameters["date"] ?: java.time.LocalDate.now().toString()
+
+                when (val result = pfzService.evaluateWithGrid(spotId, date)) {
+                    is PfzService.Result.Ok -> call.respond(result.response)
+                    is PfzService.Result.UnknownSpot ->
+                        call.respond(HttpStatusCode.NotFound, mapOf("error" to "Spot not found"))
+                    is PfzService.Result.BadDate ->
+                        call.respond(HttpStatusCode.BadRequest, mapOf("error" to result.message))
+                }
+            }
+
+            /**
+             * Ranked Potential-Fishing-Zone candidates around an arbitrary
+             * offshore point, for one species.
+             *
+             * Unlike /spots/{id}/pfz this is not anchored to a catalog spot: the
+             * caller supplies a coordinate and a species id, and the response is
+             * a ranked set of candidate zone centres (from the Copernicus Med
+             * SST/SSTA/CHL corridor, plus a single-point bathymetric depth each),
+             * scored by the same PfzEngine as the spot endpoint.
+             *
+             * Honesty contract, same as the rest of PFZ: a zone whose grid cell
+             * did not resolve reports that field null, and a box where nothing
+             * resolved returns an empty `zones` list with a coverage note —
+             * never invented fronts. Zones outside a catalog spot have no sea
+             * state, solunar or SST/CHL concentration, so those factors are
+             * missing (weights renormalize), as the coverageNotes state.
+             */
+            get("/pfz/zones") {
+                val lat = call.request.queryParameters["lat"]?.toDoubleOrNull()
+                    ?: return@get call.respond(HttpStatusCode.BadRequest, mapOf("error" to "lat required"))
+                val lon = call.request.queryParameters["lon"]?.toDoubleOrNull()
+                    ?: return@get call.respond(HttpStatusCode.BadRequest, mapOf("error" to "lon required"))
+                val date = call.request.queryParameters["date"] ?: java.time.LocalDate.now().toString()
+                val species = call.request.queryParameters["species"]
+                    ?: return@get call.respond(HttpStatusCode.BadRequest, mapOf("error" to "species required"))
+
+                when (val result = pfzService.evaluateZones(lat, lon, date, species)) {
+                    is PfzService.ZonesResult.Ok -> call.respond(result.response)
+                    is PfzService.ZonesResult.UnknownSpecies -> call.respond(
+                        HttpStatusCode.NotFound,
+                        mapOf(
+                            "error" to "Unknown species",
+                            "knownSpecies" to PfzSpeciesRegistry.all().map { it.id }
+                        )
+                    )
+                    is PfzService.ZonesResult.BadDate ->
+                        call.respond(HttpStatusCode.BadRequest, mapOf("error" to result.message))
+                    is PfzService.ZonesResult.BadLocation ->
+                        call.respond(HttpStatusCode.BadRequest, mapOf("error" to result.message))
                 }
             }
 

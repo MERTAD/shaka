@@ -2175,6 +2175,18 @@ class SpotService {
                     swellSource = "open-meteo"
                     usedBuoy = false
                 }
+
+                // ocean.swellHeight is the legacy non-null field, which falls back
+                // to 0.5m when the provider omits swell. That placeholder is fine
+                // for the display pipeline but must be flagged, or a habitat model
+                // downstream would score a fabricated 0.5m swell as a reading.
+                val swellWasMeasured = usedBuoy || ocean.rawSwellHeightM != null
+                if (!swellWasMeasured) {
+                    logger.warn(
+                        "Spot $spotId: provider returned no swell height; caching the " +
+                            "0.5m display placeholder as unmeasured so PFZ will not score it"
+                    )
+                }
                 
                 // Attenuation only for model data; buoy at < 1.5nm already reflects local conditions
                 val ld = exposure?.landDistances
@@ -2209,7 +2221,8 @@ class SpotService {
                     secondaryHeightFt = secHtRaw,
                     secondaryPeriodSec = secPeriod,
                     secondaryDirection = secDirCardinal,
-                    secondaryCorrectedHeightFt = secCorrHt
+                    secondaryCorrectedHeightFt = secCorrHt,
+                    measured = swellWasMeasured
                 )
                 
                 SpotDataCache.updateSwell(spotId, SpotDataCache.CachedValue(value = swellInfo, fetchedAt = now))

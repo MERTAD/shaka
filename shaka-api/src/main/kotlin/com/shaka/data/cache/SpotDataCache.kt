@@ -105,7 +105,20 @@ object SpotDataCache {
         val secondaryHeightFt: Double? = null,  // Secondary swell raw height
         val secondaryPeriodSec: Double? = null,  // Secondary swell period
         val secondaryDirection: String? = null,  // Secondary swell cardinal direction
-        val secondaryCorrectedHeightFt: Double? = null  // Secondary swell attenuated height
+        val secondaryCorrectedHeightFt: Double? = null,  // Secondary swell attenuated height
+        /**
+         * True when [heightFt]/[swellHeightFt] came from an actual observation.
+         *
+         * The display pipeline tolerates a placeholder when a provider omits a
+         * value, but a habitat model must not: OpenMeteoClient's legacy
+         * non-null `swellHeight` falls back to 0.5m, and that fallback is
+         * indistinguishable from a real reading without this flag. PFZ refuses
+         * to score an unmeasured swell rather than believing the placeholder.
+         *
+         * Defaults to true because buoys and existing test fixtures are real
+         * measurements; only the Open-Meteo fallback path sets it false.
+         */
+        val measured: Boolean = true
     )
 
     data class ExposureInfo(
@@ -1339,6 +1352,17 @@ object SpotDataCache {
     fun metersToFeet(meters: Double): Double = meters * 3.28084
 
     /**
+     * Convert feet to meters. Exact inverse of [metersToFeet] and of the
+     * international foot (0.3048 m).
+     */
+    fun feetToMeters(feet: Double): Double = feet * 0.3048
+
+    /**
+     * Convert knots to km/h. Inverse of [kmhToKnots].
+     */
+    fun knotsToKmh(knots: Double): Double = knots * 1.852
+
+    /**
      * Directional swell attenuation using per-direction land distances.
      *
      * Interpolates between the two nearest compass directions to find
@@ -1659,6 +1683,7 @@ object SpotDataCache {
                     ALTER TABLE spot_cache ADD COLUMN IF NOT EXISTS secondary_swell_period_sec DOUBLE PRECISION;
                     ALTER TABLE spot_cache ADD COLUMN IF NOT EXISTS secondary_swell_direction VARCHAR(10);
                     ALTER TABLE spot_cache ADD COLUMN IF NOT EXISTS secondary_swell_corrected_height_ft DOUBLE PRECISION;
+                    ALTER TABLE spot_cache ADD COLUMN IF NOT EXISTS swell_measured BOOLEAN DEFAULT TRUE;
                 """.trimIndent()
                 conn.createStatement().use { stmt ->
                     phase3Columns.split(";").filter { it.isNotBlank() }.forEach { sql ->
@@ -2149,6 +2174,20 @@ object SpotDataCache {
                     
                     stmt.executeUpdate()
                 }
+
+                // Swell provenance rides in its own statement rather than the
+                // 70-placeholder upsert above, where adding a column would mean
+                // renumbering every binding and silently corrupting the row.
+                val swellMeasured = data.swell?.value?.measured
+                if (swellMeasured != null) {
+                    conn.prepareStatement(
+                        "UPDATE spot_cache SET swell_measured = ? WHERE spot_id = ?"
+                    ).use { stmt2 ->
+                        stmt2.setBoolean(1, swellMeasured)
+                        stmt2.setString(2, spotId)
+                        stmt2.executeUpdate()
+                    }
+                }
             }
             logger.debug("Persisted cache for spot $spotId to database")
         } catch (e: Exception) {
@@ -2215,6 +2254,11 @@ object SpotDataCache {
                         val weatherFetchedAt = rs.getTimestamp("weather_fetched_at")
                         if (!rs.wasNull() && weatherFetchedAt != null) {
                             val swellSource = try { rs.getString("swell_source") } catch (_: Exception) { null }
+                            // Absent/NULL column means a pre-migration row: treat as
+                            // measured so a restart never turns a real buoy reading
+                            // into "unmeasured" and silently drops a species factor.
+                            val swellMeasured = try { rs.getBoolean("swell_measured") }
+                                catch (_: Exception) { true }
                             val correctedHt = try { rs.getDouble("swell_corrected_height_ft").takeIf { !rs.wasNull() } } catch (_: Exception) { null }
                             val secHt = try { rs.getDouble("secondary_swell_height_ft").takeIf { !rs.wasNull() } } catch (_: Exception) { null }
                             val secPeriod = try { rs.getDouble("secondary_swell_period_sec").takeIf { !rs.wasNull() } } catch (_: Exception) { null }
@@ -2231,7 +2275,8 @@ object SpotDataCache {
                                         secondaryHeightFt = secHt,
                                         secondaryPeriodSec = secPeriod,
                                         secondaryDirection = secDir,
-                                        secondaryCorrectedHeightFt = secCorrHt
+                                        secondaryCorrectedHeightFt = secCorrHt,
+                                        measured = swellMeasured
                                     ),
                                     fetchedAt = weatherFetchedAt.toInstant()
                                 )

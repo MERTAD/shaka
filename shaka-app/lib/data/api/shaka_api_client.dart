@@ -1,20 +1,22 @@
 import 'package:dio/dio.dart';
 import '../models/spot_models.dart';
+import '../models/pfz_models.dart';
 import '../services/device_id_service.dart';
+import '../../core/config/app_config.dart';
 
 /// API client for Shaka backend
 class ShakaApiClient {
   final Dio _dio;
-  
-  // Production API on Railway
-  static const String baseUrl = 'https://shaka-production.up.railway.app/v1';
+
+  // Build-configurable: see AppConfig for the --dart-define=SHAKA_API_BASE=... flag.
+  static const String baseUrl = AppConfig.apiV1;
 
   ShakaApiClient({Dio? dio})
       : _dio = dio ??
             Dio(BaseOptions(
               baseUrl: baseUrl,
               connectTimeout: const Duration(seconds: 10),
-              receiveTimeout: const Duration(seconds: 15),
+              receiveTimeout: const Duration(seconds: 120),
               headers: {
                 'Content-Type': 'application/json',
                 'Accept': 'application/json',
@@ -120,6 +122,56 @@ class ShakaApiClient {
       return SpotTideRangeResponse.fromJson(response.data);
     } on DioException catch (e) {
       if (e.response?.statusCode == 404) return null;
+      throw _handleError(e);
+    }
+  }
+
+  /// Species-specific Potential Fishing Zone verdicts for a spot and date.
+  ///
+  /// Returns null when the spot is unknown (404). A cold data cache is NOT an
+  /// error — the backend answers with low confidence and named missing factors,
+  /// which is the honest state and must reach the user rather than being
+  /// swallowed as a failure.
+  Future<PfzResponse?> getPfz({
+    required String spotId,
+    required String date,
+  }) async {
+    try {
+      final response = await _dio.get(
+        '/spots/$spotId/pfz',
+        queryParameters: {'date': date},
+      );
+      return PfzResponse.fromJson(response.data as Map<String, dynamic>);
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 404) return null;
+      throw _handleError(e);
+    }
+  }
+
+  /// SatCatch-style offshore fishing targets: ranked zones around a lat/lon for
+  /// one species and date, each a data-shaped polygon with a named centre.
+  ///
+  /// Returns the response even when the Copernicus corridor did not resolve —
+  /// the backend answers with an empty `zones` list and an honest
+  /// `coverageNotes` message rather than a hard error.
+  Future<PfzZonesResponse?> getZones({
+    required double lat,
+    required double lon,
+    required String date,
+    required String speciesId,
+  }) async {
+    try {
+      final response = await _dio.get(
+        '/pfz/zones',
+        queryParameters: {
+          'lat': lat,
+          'lon': lon,
+          'date': date,
+          'species': speciesId,
+        },
+      );
+      return PfzZonesResponse.fromJson(response.data as Map<String, dynamic>);
+    } on DioException catch (e) {
       throw _handleError(e);
     }
   }
