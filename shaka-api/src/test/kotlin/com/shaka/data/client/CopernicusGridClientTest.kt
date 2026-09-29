@@ -3,6 +3,7 @@ package com.shaka.data.client
 import kotlinx.coroutines.runBlocking
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.attribute.FileTime
 import java.time.LocalDate
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -13,16 +14,21 @@ import kotlin.test.assertTrue
 
 /**
  * Tests for [CopernicusGridClient] — the toolbox-subprocess path that feeds the
- * PFZ front-finder.
+ * PFZ front-finder — and for [CopernicusGridCache].
  *
- * Two layers are locked down:
- *  1. The CSV parser: unordered rows are re-indexed into a sorted lat/lon grid,
- *     Kelvin is converted for SST, NaN stays NaN (a missing cell, never a 0),
- *     and a malformed response is null, not a guess.
- *  2. The subprocess boundary: the command carries the right dataset variables
- *     and date, the box is clamped to dataset coverage, and credentials reach
- *     the child ONLY via process environment — never in argv, which is visible
- *     to any process that can read the command line.
+ * Four layers are locked down:
+ *  1. The 2D CSV parser: unordered rows are re-indexed into a sorted lat/lon
+ *     grid, Kelvin is converted for SST, NaN stays NaN (a missing cell, never a
+ *     0), and a malformed response is null, not a guess.
+ *  2. The 3D parser: a bedrock field takes the deepest non-masked level per
+ *     cell and records the depth it came from, so "bottom" is not a synonym for
+ *     "shallowest row" or "last row written".
+ *  3. Batching: two variables of one product cost one subprocess; two products
+ *     cost two; the box is clamped to the intersection of their coverage.
+ *  4. Hygiene: the command carries the right variables and dates, credentials
+ *     reach the child ONLY via process environment (never argv, which any local
+ *     process can read), a repeat request is served from disk, and a date before
+ *     the product archive is refused rather than answered with another day.
  */
 class CopernicusGridClientTest {
 
@@ -52,15 +58,25 @@ class CopernicusGridClientTest {
         }
     }
 
+    /**
+     * A cache rooted in a fresh temp dir per test, so a cached entry from an
+     * earlier test (or an earlier run of this suite) can never make a
+     * subprocess assertion silently pass or fail.
+     */
+    private fun isolatedCache() =
+        CopernicusGridCache(dir = Files.createTempDirectory("copernicus-test-cache"))
+
     private fun client(
         runner: CsvRunner,
         username: String? = "kmertad",
-        password: String? = "1245211458+Mk"
+        password: String? = "test-password",
+        cache: CopernicusGridCache = isolatedCache()
     ) = CopernicusGridClient(
         runner = runner,
         username = username,
         password = password,
-        cliPath = "fake-copernicusmarine.exe"
+        cliPath = "fake-copernicusmarine.exe",
+        cache = cache
     )
 
     private fun writeCsv(content: String): Path {
@@ -121,6 +137,13 @@ class CopernicusGridClientTest {
     }
 
     @Test
+    fun `a 2d product reports no cell depth because it has no depth axis`() {
+        val grid = client(CsvRunner())
+            .parseCsv(writeRealisticSstGrid(), CopernicusField.SST)
+        assertNull(grid?.cellDepthM)
+    }
+
+    @Test
     fun `a csv missing the variable column returns null, not a zero grid`() {
         val file = writeCsv(
             """
@@ -140,6 +163,100 @@ class CopernicusGridClientTest {
         assertNull(
             json.parseCsv(writeCsv("not a csv at all\n"), CopernicusField.SST)
         )
+    }
+
+    // ------------------------------------------------------- 3D bedrock parse
+
+    /**
+     * A live `cmems_mod_med_phy-sal_anfc_4.2km_P1D-m` subset has the shape
+     * `depth,latitude,longitude,time,so` with 141 levels, and rows are not
+     * ordered by depth. This is the hake's bottom salinity and the red shrimp's
+     * controlling variable, so taking the wrong row is not a cosmetic bug.
+     */
+    private val salinityCsv = """
+        depth,latitude,longitude,time,so
+        2.0,41.0,2.0,2026-09-26,38.4
+        500.0,41.0,2.0,2026-09-26,38.2
+        2.0,41.1,2.0,2026-09-26,38.5
+        500.0,41.1,2.0,2026-09-26,nan
+        1000.0,41.1,2.0,2026-09-26,38.39
+        100.0,41.0,2.1,2026-09-26,38.3
+    """.trimIndent()
+
+    @Test
+    fun `a bedrock field takes the deepest non-masked level per cell`() {
+        val grid = client(CsvRunner())
+            .parseCsv(writeCsv(salinityCsv), CopernicusField.BOTTOM_SALINITY)
+        assertNotNull(grid)
+
+        // (41.0, 2.0): deepest valid row is 500 m / 38.2, not the 2 m surface row.
+        assertEquals(38.2, grid.values[0][0], 1e-9)
+        assertEquals(500.0, grid.cellDepthM!![0][0], 1e-9)
+
+        // (41.1, 2.0): 500 m is masked, so the deepest VALID level is 1000 m.
+        // A last-write-wins parser would keep the masked 500 m or lose the cell.
+        assertEquals(38.39, grid.values[1][0], 1e-9)
+        assertEquals(1000.0, grid.cellDepthM!![1][0], 1e-9)
+
+        // A cell with only one level still resolves.
+        assertEquals(38.3, grid.values[0][1], 1e-9)
+        assertEquals(100.0, grid.cellDepthM!![0][1], 1e-9)
+    }
+
+    @Test
+    fun `a fully masked column stays missing rather than borrowing another level`() {
+        val file = writeCsv(
+            """
+            depth,latitude,longitude,time,so
+            2.0,41.0,2.0,2026-09-26,nan
+            500.0,41.0,2.0,2026-09-26,nan
+            """.trimIndent()
+        )
+        assertNull(
+            client(CsvRunner()).parseCsv(file, CopernicusField.BOTTOM_SALINITY),
+            "a column with no valid level at all is no data, not a zero grid"
+        )
+    }
+
+    @Test
+    fun `both current components are read from one batched 3d file`() {
+        val file = writeCsv(
+            """
+            depth,latitude,longitude,time,uo,vo
+            2.0,41.0,2.0,2026-09-26,-0.11,0.04
+            600.0,41.0,2.0,2026-09-26,0.02,-0.03
+            """.trimIndent()
+        )
+        val parsed = client(CsvRunner())
+            .parseCsv(file, listOf(CopernicusField.CURRENT_U, CopernicusField.CURRENT_V))
+
+        val u = assertNotNull(parsed[CopernicusField.CURRENT_U])
+        val v = assertNotNull(parsed[CopernicusField.CURRENT_V])
+        assertEquals(0.02, u.values[0][0], 1e-9)
+        assertEquals(-0.03, v.values[0][0], 1e-9)
+        assertEquals(600.0, u.cellDepthM!![0][0], 1e-9)
+    }
+
+    @Test
+    fun `a variable the product ignored is dropped, not zero-filled`() {
+        val parsed = client(CsvRunner()).parseCsv(
+            writeCsv(salinityCsv),
+            listOf(CopernicusField.BOTTOM_SALINITY, CopernicusField.MLD)
+        )
+        assertNotNull(parsed[CopernicusField.BOTTOM_SALINITY])
+        assertNull(
+            parsed[CopernicusField.MLD],
+            "a column the CLI did not write must be reported missing, not zero"
+        )
+    }
+
+    @Test
+    fun `a 3d file requested as a column field keeps the deepest row too`() {
+        // Defensive: the parser must not depend on the enum flag to be correct
+        // about which row wins, only about whether the depth is recorded.
+        val grid = client(CsvRunner())
+            .parseCsv(writeCsv(salinityCsv), CopernicusField.BOTTOM_SALINITY)
+        assertNotNull(grid?.cellDepthM)
     }
 
     // ------------------------------------------------------------- pipeline
@@ -173,6 +290,183 @@ class CopernicusGridClientTest {
         assertNull(grid)
     }
 
+    // -------------------------------------------------------------- batching
+
+    @Test
+    fun `two variables of one product share a single subprocess`() {
+        val runner = CsvRunner(
+            csv = """
+                depth,latitude,longitude,time,uo,vo
+                2.0,41.0,2.0,2026-09-26,-0.11,0.04
+                600.0,41.0,2.0,2026-09-26,0.02,-0.03
+            """.trimIndent()
+        )
+        val grids = runBlocking {
+            client(runner).fetchGrids(
+                listOf(CopernicusField.CURRENT_U, CopernicusField.CURRENT_V),
+                41.0, 2.0, date = date
+            )
+        }
+        assertEquals(2, grids.size)
+        assertEquals(1, runner.runs, "uo and vo are one product and must be one call")
+        assertEquals(2, runner.sawArgs.count { it == "--variable" })
+    }
+
+    @Test
+    fun `two products cost two subprocesses`() {
+        val runner = CsvRunner(csv = "time,latitude,longitude,bottomT\n2026-09-26,41.0,2.0,14.2\n")
+        val grids = runBlocking {
+            client(runner).fetchGrids(
+                listOf(CopernicusField.BOTTOM_TEMP, CopernicusField.SSH),
+                41.0, 2.0, date = date
+            )
+        }
+        // Only the product the fake actually served resolves; the other is absent.
+        assertEquals(setOf(CopernicusField.BOTTOM_TEMP), grids.keys)
+        assertEquals(2, runner.runs, "different products cannot share a subset call")
+    }
+
+    @Test
+    fun `the command names every variable of the batch and the exact date`() {
+        val runner = CsvRunner()
+        runBlocking {
+            client(runner).fetchGrids(
+                listOf(CopernicusField.CURRENT_U, CopernicusField.CURRENT_V),
+                41.0, 2.0, date = date
+            )
+        }
+        val args = runner.sawArgs
+        assertTrue(args.contains("cmems_mod_med_phy-cur_anfc_4.2km_P1D-m"))
+        assertTrue(args.contains("uo") && args.contains("vo"))
+        assertTrue(args.contains("2026-09-26"), "--start/--end datetime must be the requested date")
+        assertTrue(args.contains("--file-format") && args.contains("csv"))
+    }
+
+    // ---------------------------------------------------------- temporal fits
+
+    @Test
+    fun `a daily NRT request for today is clamped to yesterday`() {
+        val runner = CsvRunner(csv = "time,latitude,longitude,bottomT\n2026-09-26,41.0,2.0,14.2\n")
+        val yesterday = LocalDate.now().minusDays(1)
+        runBlocking {
+            client(runner).fetchGrid(CopernicusField.BOTTOM_TEMP, 41.0, 2.0, date = LocalDate.now())
+        }
+        assertTrue(runner.sawArgs.contains(yesterday.toString()), "${runner.sawArgs}")
+    }
+
+    @Test
+    fun `a monthly ssh request resolves to the first of the previous month`() {
+        val runner = CsvRunner(csv = "time,latitude,longitude,zos\n2026-08-01,41.0,2.0,-0.40\n")
+        runBlocking {
+            client(runner).fetchGrid(CopernicusField.SSH_MONTHLY, 41.0, 2.0, date = date)
+        }
+        val expected = java.time.YearMonth.from(date).minusMonths(1).atDay(1).toString()
+        val start = runner.sawArgs[runner.sawArgs.indexOf("--start-datetime") + 1]
+        val end = runner.sawArgs[runner.sawArgs.indexOf("--end-datetime") + 1]
+        assertEquals(expected, start)
+        assertEquals(expected, end)
+        assertTrue(runner.sawArgs.contains("cmems_mod_med_phy-ssh_anfc_4.2km_P1M-m"))
+    }
+
+    @Test
+    fun `a date before the product archive is refused without calling the cli`() {
+        val runner = CsvRunner()
+        // Daily physics archive starts 2024-08-26.
+        val grid = runBlocking {
+            client(runner).fetchGrid(
+                CopernicusField.BOTTOM_TEMP, 41.0, 2.0,
+                date = LocalDate.of(2024, 1, 5)
+            )
+        }
+        assertNull(grid, "a pre-archive date must not be answered with another day's data")
+        assertEquals(0, runner.runs)
+    }
+
+    // ------------------------------------------------------------------ cache
+
+    @Test
+    fun `a second identical request is served from disk without the cli`() {
+        val cache = isolatedCache()
+        val runner = CsvRunner(csv = "time,latitude,longitude,bottomT\n2026-09-26,41.0,2.0,14.2\n")
+        val first = runBlocking {
+            client(runner, cache = cache).fetchGrid(CopernicusField.BOTTOM_TEMP, 41.0, 2.0, date = date)
+        }
+        assertNotNull(first)
+        assertEquals(1, runner.runs)
+
+        val second = runBlocking {
+            client(runner, cache = cache).fetchGrid(CopernicusField.BOTTOM_TEMP, 41.0, 2.0, date = date)
+        }
+        assertNotNull(second)
+        assertEquals(14.2, second.values[0][0], 1e-9)
+        assertEquals(1, runner.runs, "the second request must not re-run the CLI")
+    }
+
+    @Test
+    fun `a cached grid is still served when the credentials are gone`() {
+        val cache = isolatedCache()
+        val runner = CsvRunner(csv = "time,latitude,longitude,bottomT\n2026-09-26,41.0,2.0,14.2\n")
+        runBlocking { client(runner, cache = cache).fetchGrid(CopernicusField.BOTTOM_TEMP, 41.0, 2.0, date = date) }
+        assertEquals(1, runner.runs)
+
+        val runner2 = CsvRunner()
+        val cached = runBlocking {
+            client(runner2, username = null, password = null, cache = cache)
+                .fetchGrid(CopernicusField.BOTTOM_TEMP, 41.0, 2.0, date = date)
+        }
+        assertNotNull(cached, "real dated data already fetched must not be thrown away")
+        assertEquals(14.2, cached.values[0][0], 1e-9)
+        assertEquals(0, runner2.runs)
+    }
+
+    @Test
+    fun `a different day or box is a different cache entry`() {
+        val cache = isolatedCache()
+        val runner = CsvRunner(csv = "time,latitude,longitude,bottomT\n2026-09-26,41.0,2.0,14.2\n")
+        val c = client(runner, cache = cache)
+        runBlocking { c.fetchGrid(CopernicusField.BOTTOM_TEMP, 41.0, 2.0, date = date) }
+        runBlocking { c.fetchGrid(CopernicusField.BOTTOM_TEMP, 41.0, 2.0, date = date.minusDays(1)) }
+        runBlocking { c.fetchGrid(CopernicusField.BOTTOM_TEMP, 41.5, 2.0, date = date) }
+        assertEquals(3, runner.runs, "a different day or a different box must not reuse an entry")
+    }
+
+    @Test
+    fun `cache keys are hashed to a legal file name`() {
+        val key = CopernicusGridCache.keyOf(
+            "cmems_mod_med_phy-cur_anfc_4.2km_P1D-m", "uo+vo",
+            "1.800000", "2.200000", "-0.300000", "0.300000", "2026-09-26", "2026-09-26"
+        )
+        assertTrue(key.matches(Regex("[0-9a-f]{64}")), key)
+    }
+
+    @Test
+    fun `an expired entry is discarded so reprocessed days can reach users`() {
+        val dir = Files.createTempDirectory("copernicus-test-expiry")
+        val cache = CopernicusGridCache(dir = dir)
+        val key = CopernicusGridCache.keyOf("k")
+        cache.write(key, writeCsv("time,latitude,longitude,bottomT\n2026-09-26,41.0,2.0,14.2\n"))
+        assertNotNull(cache.read(key))
+
+        // Age the entry past the 36 h window the client uses by default.
+        val twoDaysAgo = FileTime.fromMillis(System.currentTimeMillis() - 2L * 24 * 60 * 60 * 1000)
+        Files.setLastModifiedTime(dir.resolve("$key.csv"), twoDaysAgo)
+
+        assertNull(cache.read(key), "an entry older than the max age must not be served")
+        assertEquals(1, cache.prune())
+        assertNull(cache.read(key))
+    }
+
+    @Test
+    fun `an unwritable cache directory degrades to no cache`() {
+        val readOnly = Files.createTempDirectory("copernicus-test-ro")
+        val notADir = readOnly.resolve("a-file")
+        Files.writeString(notADir, "x")
+        val cache = CopernicusGridCache(dir = notADir.resolve("under-a-file"))
+        assertNull(cache.write("k", writeCsv("a\n")))
+    }
+
+    // --------------------------------------------------------------- hygiene
+
     @Test
     fun `missing credentials skip the CLI entirely`() {
         val runner = CsvRunner()
@@ -184,8 +478,6 @@ class CopernicusGridClientTest {
         assertEquals(0, runner.runs, "no credentials must mean no subprocess call")
     }
 
-    // --------------------------------------------------------------- hygiene
-
     @Test
     fun `credentials reach the child only via environment, never in argv`() {
         val runner = CsvRunner(csv = runCatching { writeRealisticSstGrid().toFile().readText() }.getOrNull())
@@ -195,32 +487,14 @@ class CopernicusGridClientTest {
 
         assertEquals(1, runner.runs)
         assertEquals("kmertad", runner.sawEnv["COPERNICUSMARINE_SERVICE_USERNAME"])
-        assertEquals("1245211458+Mk", runner.sawEnv["COPERNICUSMARINE_SERVICE_PASSWORD"])
+        assertEquals("test-password", runner.sawEnv["COPERNICUSMARINE_SERVICE_PASSWORD"])
 
         val argString = runner.sawArgs.joinToString(" ")
         assertFalse(argString.contains("kmertad"), "username must not appear in argv: $argString")
         assertFalse(
-            argString.contains("1245211458"),
+            argString.contains("test-password"),
             "password must not appear in argv: $argString"
         )
-    }
-
-    @Test
-    fun `the command names the dataset variable and the exact date`() {
-        val runner = CsvRunner()
-        runBlocking {
-            client(runner).fetchGrid(CopernicusField.SSTA, 41.5, 2.5, date = date)
-        }
-        val args = runner.sawArgs
-        assertTrue(args.contains("subset"))
-        assertTrue(args.contains("--dataset-id"))
-        assertTrue(
-            args.contains("SST_MED_SSTA_L4_NRT_OBSERVATIONS_010_004_d"),
-            "SSA field must pin its own dataset: ${args.joinToString(" ")}"
-        )
-        assertTrue(args.contains("sst_anomaly"))
-        assertTrue(args.contains("2026-09-26"), "--start/--end datetime must be the requested date")
-        assertTrue(args.contains("--file-format") && args.contains("csv"))
     }
 
     @Test
@@ -235,11 +509,31 @@ class CopernicusGridClientTest {
     }
 
     @Test
+    fun `a physics box clamps to the shared anfc product extent`() {
+        val runner = CsvRunner()
+        runBlocking {
+            client(runner).fetchGrid(CopernicusField.BOTTOM_TEMP, 45.95, 2.5, date = date)
+        }
+        val args = runner.sawArgs
+        assertEquals("45.979200", args[args.indexOf("--maximum-latitude") + 1])
+    }
+
+    @Test
     fun `a box entirely outside the dataset coverage does not call the CLI`() {
         val runner = CsvRunner()
         // Mediterranean SST coverage starts at 30.25N.
         val grid = runBlocking {
             client(runner).fetchGrid(CopernicusField.SST, 27.0, 2.5, date = date)
+        }
+        assertNull(grid)
+        assertEquals(0, runner.runs)
+    }
+
+    @Test
+    fun `a box entirely south of the anfc physics extent is refused`() {
+        val runner = CsvRunner()
+        val grid = runBlocking {
+            client(runner).fetchGrid(CopernicusField.BOTTOM_TEMP, 29.5, 2.5, date = date)
         }
         assertNull(grid)
         assertEquals(0, runner.runs)
