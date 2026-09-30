@@ -9,6 +9,7 @@ import java.time.Instant
 import java.time.LocalDate
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -418,15 +419,39 @@ class PfzServiceTest {
     private fun grid(
         field: CopernicusField,
         date: String = "2026-07-14",
+        lat: Double = 41.51,
+        lon: Double = 2.51,
         cell: (i: Int, j: Int) -> Double = { _, _ -> 0.0 }
     ): CopernicusGrid {
-        val lats = listOf(41.51, 41.52)
-        val lons = listOf(2.51, 2.52)
+        val lats = listOf(lat, lat + 0.01)
+        val lons = listOf(lon, lon + 0.01)
         val values = List(lats.size) { i -> List(lons.size) { j -> cell(i, j) } }
         return CopernicusGrid(field, lats, lons, values, LocalDate.parse(date), field.label)
     }
 
     private fun gridService(source: PfzGridSource) = PfzGridService(source)
+
+    /**
+     * A corridor that is a physically coherent bluefin *feeding* cell.
+     *
+     * Every value here is chosen so the v2 model can actually score it, which is
+     * the point: bluefin feeding declares `sst`, `chla_gradient` and
+     * `ssh_anomaly` REQUIRED, so a stub of arbitrary small integers now resolves
+     * to `insufficient_data` or `unavailable` rather than a number. The rows step
+     * 16 -> 18 C, the columns step 0.5 -> 1.5 mg/m3 so a coincident SST/CHL front
+     * is still detected while the sampled chlorophyll stays inside the cited
+     * 0.02-20 mg/m3 feeding window, and the SSH pair differences to -0.02 m,
+     * which is inside the cited -0.10..0.0 m window.
+     */
+    private fun bluefinZoneStub() = StubSource(
+        mapOf(
+            CopernicusField.SST to grid(CopernicusField.SST) { i, _ -> 16.0 + i * 2.0 },
+            CopernicusField.SSTA to grid(CopernicusField.SSTA) { _, _ -> 0.6 },
+            CopernicusField.CHL to grid(CopernicusField.CHL) { _, j -> 0.5 + j },
+            CopernicusField.SSH to grid(CopernicusField.SSH) { _, _ -> 0.0 },
+            CopernicusField.SSH_MONTHLY to grid(CopernicusField.SSH_MONTHLY) { _, _ -> 0.02 }
+        )
+    )
 
     @Test
     fun `observeWithGrid enriches the observation when the corridor resolves`() {
@@ -499,17 +524,7 @@ class PfzServiceTest {
 
     @Test
     fun `evaluateZones ranks scoreable grid zones for the species`() {
-        val service = PfzService(
-            gridSource = gridService(
-                StubSource(
-                    mapOf(
-                        CopernicusField.SST to grid(CopernicusField.SST) { i, _ -> i.toDouble() },
-                        CopernicusField.SSTA to grid(CopernicusField.SSTA) { _, _ -> 0.6 },
-                        CopernicusField.CHL to grid(CopernicusField.CHL) { _, j -> j.toDouble() }
-                    )
-                )
-            )
-        )
+        val service = PfzService(gridSource = gridService(bluefinZoneStub()))
 
         when (val result = rankedZones(service)) {
             is PfzService.ZonesResult.Ok -> {
@@ -523,6 +538,13 @@ class PfzServiceTest {
                 assertEquals("bluefin_tuna", result.response.speciesId)
                 assertNotNull(best.frontKm, "a zone sitting on a front must be measured at ~0 km")
                 assertTrue(best.frontKm!! < 5.0, "frontKm = ${best.frontKm}")
+                // The applied context travels with the zone, or the number is not
+                // reproducible: the same corridor run as `spawning` is refused.
+                assertEquals("feeding", best.mode)
+                assertEquals("large", best.sizeClass)
+                // 2.5 E is west of the 8 E divide, so the zone resolves to the
+                // western basin from its own centroid.
+                assertEquals(PfzRegions.WESTERN, best.region)
             }
             else -> assertTrue(false, "expected Ok for a resolved corridor, got $result")
         }
@@ -530,17 +552,7 @@ class PfzServiceTest {
 
     @Test
     fun `zones carry satcatch target names and polygon geometry on the wire`() {
-        val service = PfzService(
-            gridSource = gridService(
-                StubSource(
-                    mapOf(
-                        CopernicusField.SST to grid(CopernicusField.SST) { i, _ -> i.toDouble() },
-                        CopernicusField.SSTA to grid(CopernicusField.SSTA) { _, _ -> 0.6 },
-                        CopernicusField.CHL to grid(CopernicusField.CHL) { _, j -> j.toDouble() }
-                    )
-                )
-            )
-        )
+        val service = PfzService(gridSource = gridService(bluefinZoneStub()))
 
         when (val result = rankedZones(service)) {
             is PfzService.ZonesResult.Ok -> {
@@ -554,7 +566,10 @@ class PfzServiceTest {
                 // The keys the Flutter map overlay parses must be on the wire.
                 val json = Json { prettyPrint = true; encodeDefaults = false }
                 val encoded = json.encodeToString(PfzZone.serializer(), zone)
-                for (key in listOf("rank", "name", "lat", "lon", "polygon", "pfz", "frontCoincidence")) {
+                for (key in listOf(
+                    "rank", "name", "lat", "lon", "polygon", "pfz", "frontCoincidence",
+                    "mode", "sizeClass", "region"
+                )) {
                     assertTrue(encoded.contains("\"$key\""), "zone wire key '$key' absent: $encoded")
                 }
             }
@@ -596,5 +611,103 @@ class PfzServiceTest {
             "the caller must be told why there are no zones, got ${response.coverageNotes}"
         )
         assertEquals(0, response.confidence)
+    }
+
+    // ------------------------------------------------- zone mode and size class
+
+    @Test
+    fun `a zone request carries the applied mode and size class through to the wire`() {
+        val service = PfzService(gridSource = gridService(bluefinZoneStub()))
+
+        val spawning = runBlocking {
+            service.evaluateZones(
+                41.515, 2.515, "2026-07-14", "bluefin_tuna", mode = "spawning"
+            )
+        }
+        assertTrue(spawning is PfzService.ZonesResult.Ok)
+        val zone = (spawning as PfzService.ZonesResult.Ok).response.zones.first()
+        assertEquals("spawning", zone.mode)
+        assertEquals("large", zone.sizeClass)
+        // Same corridor, different model: the cited spawning chlorophyll window
+        // is 0-0.15 mg/m3 and this cell carries ~1, so it is refused rather than
+        // ranked low. Without the mode parameter this request would have
+        // silently returned the feeding answer.
+        assertEquals(PfzStatus.UNAVAILABLE, zone.status)
+        assertNull(zone.pfz)
+        assertTrue(
+            zone.blockers.any { it.startsWith("chl:") },
+            "got ${zone.blockers}"
+        )
+    }
+
+    @Test
+    fun `a zone request for an unparameterised size class is refused`() {
+        val service = PfzService(gridSource = gridService(bluefinZoneStub()))
+
+        val small = runBlocking {
+            service.evaluateZones(
+                41.515, 2.515, "2026-07-14", "bluefin_tuna", sizeClass = "small"
+            )
+        }
+        assertTrue(small is PfzService.ZonesResult.Ok)
+        val zone = (small as PfzService.ZonesResult.Ok).response.zones.first()
+        assertEquals(PfzStatus.INSUFFICIENT_DATA, zone.status)
+        assertNull(zone.pfz, "a zone must not borrow another size class's thresholds")
+        assertTrue(
+            zone.blockers.any { it.contains("small") },
+            "got ${zone.blockers}"
+        )
+    }
+
+    // ------------------------------------------- zone benthic required factors
+
+    @Test
+    fun `a zone carries the benthic measurements its species requires`() {
+        // Red shrimp is the test case that matters offshore: its cited envelope
+        // is 13.0-14.5 C bottom temperature in 38.1-38.5 psu, both REQUIRED. If
+        // analyzeZones did not fetch the benthic products, every red shrimp zone
+        // would be permanently insufficient_data and the species would look
+        // absent from the whole basin rather than unmeasured.
+        val service = PfzService(
+            gridSource = gridService(
+                StubSource(
+                    mapOf(
+                        CopernicusField.SST to
+                            grid(CopernicusField.SST, lat = 36.5, lon = 15.0) { i, _ -> 16.0 + i * 2.0 },
+                        CopernicusField.SSTA to
+                            grid(CopernicusField.SSTA, lat = 36.5, lon = 15.0) { _, _ -> 0.6 },
+                        CopernicusField.CHL to
+                            grid(CopernicusField.CHL, lat = 36.5, lon = 15.0) { _, j -> 0.5 + j },
+                        CopernicusField.BOTTOM_TEMP to
+                            grid(CopernicusField.BOTTOM_TEMP, lat = 36.5, lon = 15.0) { _, _ -> 13.7 },
+                        CopernicusField.BOTTOM_SALINITY to
+                            grid(CopernicusField.BOTTOM_SALINITY, lat = 36.5, lon = 15.0) { _, _ -> 38.3 }
+                    )
+                )
+            )
+        )
+
+        val result = runBlocking {
+            // The stub cells have to sit where the request does, because the zone
+            // is classified from its own centroid. 36.5 N / 15 E resolves to the
+            // central basin, so the western exclusion is not what stops this
+            // request.
+            service.evaluateZones(36.5, 15.0, "2026-07-14", "red_shrimp")
+        }
+        assertTrue(result is PfzService.ZonesResult.Ok, "got $result")
+        val zones = (result as PfzService.ZonesResult.Ok).response.zones
+        assertTrue(zones.isNotEmpty(), "a resolved corridor must yield candidate zones")
+
+        // Depth is the one thing the grid cannot give, so the refusal must name
+        // depth and only depth: that is a data-source gap, not a bad reading.
+        val best = zones.first()
+        assertTrue(
+            best.blockers.any { it.contains(PfzFactor.DEPTH) && it.contains("required") },
+            "expected a depth requirement blocker, got ${best.blockers}"
+        )
+        assertFalse(
+            best.blockers.any { it.contains("bottom_temp") || it.contains("bottom_salinity") },
+            "the benthic products must reach the zone: got ${best.blockers}"
+        )
     }
 }

@@ -119,6 +119,16 @@ object PfzSpeciesRegistry {
         p.swellMMax?.let { if (it < 0) problems += "swellMMax < 0" }
         p.oceanCurrentKmhMax?.let { if (it < 0) problems += "oceanCurrentKmhMax < 0" }
 
+        // v2 bands
+        validateBand(p.bottomTempC, "bottomTempC", problems)
+        validateBand(p.bottomSalinityPsu, "bottomSalinityPsu", problems)
+        validateBand(p.bottomCurrentMs, "bottomCurrentMs", problems)
+        validateBand(p.mldM, "mldM", problems)
+        validateBand(p.sshAnomalyM, "sshAnomalyM", problems)
+        validateBand(p.sstWarmingC, "sstWarmingC", problems)
+
+        validateV2(p, problems)
+
         p.season?.let { s ->
             (s.peakMonths + s.closedMonths).forEach { m ->
                 if (m !in 1..12) problems += "season month out of range: $m"
@@ -142,6 +152,131 @@ object PfzSpeciesRegistry {
         }
 
         return problems
+    }
+
+    /**
+     * Validation for the v2 blocks: modes, region overrides, required factors
+     * and evidence.
+     *
+     * The rules that matter are the ones that would otherwise fail *silently* at
+     * runtime and produce a confident wrong answer:
+     *  - a required factor the profile does not define can never be satisfied, so
+     *    the species would be permanently INSUFFICIENT_DATA;
+     *  - a mode that is never the default and never the only one is unreachable;
+     *  - a size class with no band override is a promise the data cannot keep.
+     */
+    private fun validateV2(p: SpeciesProfile, problems: MutableList<String>) {
+        if (p.modes.isNotEmpty()) {
+            val modeIds = mutableSetOf<String>()
+            p.modes.forEach { m ->
+                if (!modeIds.add(m.id)) problems += "duplicate mode '${m.id}'"
+                if (m.id.isBlank()) problems += "blank mode id"
+                validateBand(m.sstC, "modes.${m.id}.sstC", problems)
+                validateBand(m.chlMgM3, "modes.${m.id}.chlMgM3", problems)
+                validateBand(m.sshAnomalyM, "modes.${m.id}.sshAnomalyM", problems)
+                validateBand(m.sstWarmingC, "modes.${m.id}.sstWarmingC", problems)
+                validateSeason(m.season, "modes.${m.id}.season", problems)
+                validateDepth(m.depth, "modes.${m.id}.depth", problems)
+                validateWeights(m.weights, "modes.${m.id}.weights", problems)
+                validateFactors(m.requiredFactors, "modes.${m.id}.requiredFactors", problems)
+                if (m.defaultSizeClass != null && m.sizeClasses.isNotEmpty() &&
+                    m.defaultSizeClass !in m.sizeClasses
+                ) {
+                    problems += "modes.${m.id}: defaultSizeClass '${m.defaultSizeClass}' is not in sizeClasses"
+                }
+                if (m.sizeClasses.isEmpty() && m.defaultSizeClass != null) {
+                    problems += "modes.${m.id}: defaultSizeClass set but no sizeClasses declared"
+                }
+            }
+            if (p.modes.none { it.isDefault } && p.modes.size > 1) {
+                problems += "no default mode among ${p.modes.size} modes — a bare ?mode= would be ambiguous"
+            }
+        }
+
+        p.byRegion.forEach { (region, o) ->
+            if (region !in PfzRegions.ALL) {
+                problems += "byRegion has unknown region '$region' (expected one of ${PfzRegions.ALL})"
+            }
+            if (o.unavailable.isNullOrBlank() && o.sstC == null && o.chlMgM3 == null &&
+                o.bottomTempC == null && o.bottomSalinityPsu == null && o.bottomCurrentMs == null &&
+                o.depth == null && o.season == null && o.weights.isEmpty()
+            ) {
+                problems += "byRegion.$region overrides nothing"
+            }
+            validateBand(o.sstC, "byRegion.$region.sstC", problems)
+            validateBand(o.chlMgM3, "byRegion.$region.chlMgM3", problems)
+            validateBand(o.bottomTempC, "byRegion.$region.bottomTempC", problems)
+            validateBand(o.bottomSalinityPsu, "byRegion.$region.bottomSalinityPsu", problems)
+            validateBand(o.bottomCurrentMs, "byRegion.$region.bottomCurrentMs", problems)
+            validateDepth(o.depth, "byRegion.$region.depth", problems)
+            validateSeason(o.season, "byRegion.$region.season", problems)
+            validateWeights(o.weights, "byRegion.$region.weights", problems)
+            validateFactors(o.requiredFactors, "byRegion.$region.requiredFactors", problems)
+        }
+
+        validateFactors(p.requiredFactors, "requiredFactors", problems)
+
+        val evidenceKeys = mutableSetOf<String>()
+        p.evidence.forEach { e ->
+            if (e.key.isBlank()) problems += "blank evidence key"
+            else if (!evidenceKeys.add(e.key)) problems += "duplicate evidence key '${e.key}'"
+            if (e.citation.isBlank()) problems += "evidence '${e.key}' has a blank citation"
+            if (e.usedFor.isBlank()) problems += "evidence '${e.key}' has a blank usedFor"
+        }
+    }
+
+    private fun validateWeights(weights: Map<String, Double>, name: String, problems: MutableList<String>) {
+        if (weights.isEmpty()) return
+        weights.forEach { (factor, w) ->
+            if (factor !in PfzFactor.ALL) problems += "$name has unknown factor '$factor'"
+            if (w < 0) problems += "$name has negative weight for '$factor'"
+        }
+        val sum = weights.values.sum()
+        if (kotlin.math.abs(sum - 1.0) > WEIGHT_SUM_TOLERANCE) {
+            problems += "$name sum to ${"%.3f".format(sum)}, expected 1.0"
+        }
+    }
+
+    /**
+     * A required factor must be one the profile can actually evaluate AND one it
+     * gives real weight to. Requiring an unweighted factor would demand a
+     * measurement the species does not care about; requiring an unknown factor
+     * would demand something no observation can ever supply, and the species
+     * would be permanently unscoreable with no obvious cause.
+     */
+    private fun validateFactors(
+        factors: List<String>,
+        name: String,
+        problems: MutableList<String>
+    ) {
+        val seen = mutableSetOf<String>()
+        factors.forEach { f ->
+            if (!seen.add(f)) problems += "$name lists '$f' twice"
+            if (f !in PfzFactor.ALL) {
+                problems += "$name has unknown factor '$f'"
+            } else if (f == PfzFactor.WIND || f == PfzFactor.SWELL || f == PfzFactor.SOLUNAR) {
+                problems += "$name requires '$f', which is not a habitat measurement"
+            }
+        }
+    }
+
+    private fun validateSeason(s: SeasonSpec?, name: String, problems: MutableList<String>) {
+        if (s == null) return
+        (s.peakMonths + s.closedMonths).forEach { m ->
+            if (m !in 1..12) problems += "$name month out of range: $m"
+        }
+        s.closedMonths.forEach { m ->
+            if (m in s.peakMonths) problems += "$name month $m is both peak and closed"
+        }
+    }
+
+    private fun validateDepth(d: DepthSpec?, name: String, problems: MutableList<String>) {
+        if (d == null) return
+        if (d.gateMinM < 0) problems += "$name gateMinM < 0"
+        if (d.gateMinM > d.gateMaxM) problems += "$name gateMinM > gateMaxM"
+        if (d.prefMinM != null && d.prefMaxM != null && d.prefMinM > d.prefMaxM) {
+            problems += "$name prefMinM > prefMaxM"
+        }
     }
 
     private fun validateBand(b: BandSpec?, name: String, problems: MutableList<String>) {

@@ -69,7 +69,12 @@ class PfzService(
         data object UnknownSpecies : ZonesResult
     }
 
-    fun evaluate(spotId: String, date: String): Result {
+    fun evaluate(
+        spotId: String,
+        date: String,
+        mode: String? = null,
+        sizeClass: String? = null
+    ): Result {
         if (spotDb.findSpotById(spotId) == null) {
             return Result.UnknownSpot
         }
@@ -85,7 +90,7 @@ class PfzService(
             "PFZ {} {} depth={} ({}) sst={} chl={}",
             spotId, date, obs.depthM, obs.depthSource, obs.waterTempC, obs.chlorophyllMgM3
         )
-        return Result.Ok(PfzEngine.evaluate(obs))
+        return Result.Ok(PfzEngine.evaluate(obs, mode = mode, sizeClass = sizeClass))
     }
 
     /**
@@ -93,7 +98,12 @@ class PfzService(
      * source when one is configured. The route uses this; tests of the
      * cache-only path keep using [evaluate].
      */
-    suspend fun evaluateWithGrid(spotId: String, date: String): Result {
+    suspend fun evaluateWithGrid(
+        spotId: String,
+        date: String,
+        mode: String? = null,
+        sizeClass: String? = null
+    ): Result {
         if (spotDb.findSpotById(spotId) == null) {
             return Result.UnknownSpot
         }
@@ -110,14 +120,21 @@ class PfzService(
             spotId, date, obs.sstGradientCkm, obs.chlaGradient,
             obs.frontCoincidence, obs.sstAnomalyC, obs.forecastDay
         )
-        return Result.Ok(PfzEngine.evaluate(obs))
+        return Result.Ok(PfzEngine.evaluate(obs, mode = mode, sizeClass = sizeClass))
     }
 
     /**
      * Same-day scored response, but for an arbitrary offshore coordinate rather
      * than a cached catalog spot.
      */
-    suspend fun evaluateZones(lat: Double, lon: Double, date: String, speciesId: String): ZonesResult {
+    suspend fun evaluateZones(
+        lat: Double,
+        lon: Double,
+        date: String,
+        speciesId: String,
+        mode: String? = null,
+        sizeClass: String? = null
+    ): ZonesResult {
         if (!lat.isFinite() || abs(lat) > 90 || !lon.isFinite() || abs(lon) > 180) {
             return ZonesResult.BadLocation("lat in [-90, 90], lon in [-180, 180], got ($lat, $lon)")
         }
@@ -146,7 +163,11 @@ class PfzService(
         }
 
         val ranked = data
-            .map { datum -> datum to PfzEngine.evaluateSpecies(profile, zoneObservation(parsed, datum)) }
+            .map { datum ->
+                datum to PfzEngine.evaluateSpecies(
+                    profile, zoneObservation(parsed, datum), mode, sizeClass
+                )
+            }
             .sortedWith(
                 compareByDescending<Pair<PfzZoneDatum, PfzSpeciesResult>> { it.second.status == PfzStatus.SCOREABLE }
                     .thenByDescending { it.second.pfz ?: -1 }
@@ -174,6 +195,12 @@ class PfzService(
                 chlaGradientMgM3km = datum.chlaGradientMgM3km,
                 sstAnomalyC = datum.sstAnomalyC,
                 depthM = datum.depthM,
+                // Applied context is echoed per zone: the same request can be run
+                // for two modes of one species, and a zone number without the
+                // model that produced it is not reproducible.
+                mode = result.mode,
+                sizeClass = result.sizeClass,
+                region = result.region,
                 drivers = result.drivers,
                 blockers = result.blockers,
                 missingFactors = result.missingFactors,
@@ -201,6 +228,14 @@ class PfzService(
         spotId = "offshore",
         date = date,
         depthM = datum.depthM,
+        waterTempC = datum.waterTempC,
+        chlorophyllMgM3 = datum.chlorophyllMgM3,
+        bottomTempC = datum.bottomTempC,
+        bottomSalinityPsu = datum.bottomSalinityPsu,
+        bottomCurrentMs = datum.bottomCurrentMs,
+        mldM = datum.mldM,
+        sshAnomalyM = datum.sshAnomalyM,
+        sstWarmingC = datum.sstWarmingC,
         chlaGradient = datum.chlaGradientMgM3km,
         sstGradientCkm = datum.sstGradientCkm,
         sstAnomalyC = datum.sstAnomalyC,
@@ -209,7 +244,11 @@ class PfzService(
         frontCoincidence = datum.frontCoincidence,
         dataDate = datum.dataDate,
         forecastDay = datum.forecastDay,
-        region = null
+        // A zone has no spot id, so the macro-basin is classified from its own
+        // centroid. Without this a red shrimp request off Algiers and one in the
+        // Aegean would both score against basin-wide bands, which is the exact
+        // failure the region gates exist to prevent.
+        region = PfzRegions.classifyByPosition(datum.lat, datum.lon)
     )
 
     private fun zonesResponse(
@@ -227,8 +266,11 @@ class PfzService(
                 "outline and its centre is the patch centroid. Grid-resolution bathymetry is " +
                 "not available, so depth is a single-point reading at a sample cell inside " +
                 "each polygon.",
-            "Sea state, solunar and SST/CHL concentration are not measurable for an arbitrary " +
-                "offshore point, so those factors are missing (weights renormalize) rather than guessed.",
+            "Wind, swell, solunar and bathymetry are not measurable for an arbitrary offshore " +
+                "point, so those factors are missing (weights renormalize) rather than guessed. " +
+                "Depth is the one field a species can require outright — the hake and the red " +
+                "shrimp are both written against it — so a zone for either is reported as " +
+                "insufficient_data until gridded bathymetry exists, not scored without it.",
             "Zone scores use the basin-wide habitat bands; a per-region SST override is not applied " +
                 "outside the catalog spots."
         )
@@ -322,9 +364,7 @@ class PfzService(
         val record = spotDb.findSpotById(spotId) ?: return base
 
         val grid = source.analyze(record.coordinates.lat, record.coordinates.lon, date)
-        if (grid.dataDate == null && grid.frontCoincidence == null &&
-            grid.sstGradientCkm == null && grid.sstAnomalyC == null
-        ) {
+        if (grid == PfzSpatialGrid.missing()) {
             // Nothing resolved — the analysis corridor is honestly unknown.
             return base
         }
@@ -341,7 +381,26 @@ class PfzService(
             frontKm = grid.frontKm,
             frontCoincidence = grid.frontCoincidence,
             dataDate = grid.dataDate,
-            forecastDay = forecastDays
+            forecastDay = forecastDays,
+            // Benthic and mesoscale fields. These are what the demersal profiles
+            // are written against, and for hake and red shrimp they are REQUIRED:
+            // without them the result is insufficient_data rather than a score
+            // built from whatever happened to resolve.
+            bottomTempC = grid.bottomTempC,
+            bottomSalinityPsu = grid.bottomSalinityPsu,
+            bottomCurrentMs = grid.bottomCurrentMs,
+            mldM = grid.mldM,
+            sshAnomalyM = grid.sshAnomalyM,
+            sstWarmingC = grid.sstWarmingC,
+            // Curated spot-id prefix first, then the position. The in-memory
+            // spot catalog carries no region column, so there is no tag to
+            // prefer; PfzRegions.classify still takes one for callers that have
+            // a real inventory.
+            region = PfzRegions.classify(
+                spotId = spotId,
+                lat = record.coordinates.lat,
+                lon = record.coordinates.lon
+            )
         )
     }
 

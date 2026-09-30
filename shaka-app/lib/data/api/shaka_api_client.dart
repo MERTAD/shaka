@@ -132,14 +132,25 @@ class ShakaApiClient {
   /// error — the backend answers with low confidence and named missing factors,
   /// which is the honest state and must reach the user rather than being
   /// swallowed as a failure.
+  ///
+  /// [mode] and [sizeClass] are sent only when supplied. Bluefin feeding and
+  /// spawning are near-inverted models, so omitting them gets the documented
+  /// default (feeding, large fish) rather than a guess: the backend echoes back
+  /// which mode and size class it actually applied.
   Future<PfzResponse?> getPfz({
     required String spotId,
     required String date,
+    String? mode,
+    String? sizeClass,
   }) async {
     try {
       final response = await _dio.get(
         '/spots/$spotId/pfz',
-        queryParameters: {'date': date},
+        queryParameters: {
+          'date': date,
+          if (mode != null) 'mode': mode,
+          if (sizeClass != null) 'sizeClass': sizeClass,
+        },
       );
       return PfzResponse.fromJson(response.data as Map<String, dynamic>);
     } on DioException catch (e) {
@@ -154,11 +165,17 @@ class ShakaApiClient {
   /// Returns the response even when the Copernicus corridor did not resolve —
   /// the backend answers with an empty `zones` list and an honest
   /// `coverageNotes` message rather than a hard error.
+  ///
+  /// [mode] and [sizeClass] behave as in [getPfz]: a zone scored for one mode is
+  /// a different number from the same polygon scored for another, so the applied
+  /// context is echoed on every zone.
   Future<PfzZonesResponse?> getZones({
     required double lat,
     required double lon,
     required String date,
     required String speciesId,
+    String? mode,
+    String? sizeClass,
   }) async {
     try {
       final response = await _dio.get(
@@ -168,6 +185,8 @@ class ShakaApiClient {
           'lon': lon,
           'date': date,
           'species': speciesId,
+          if (mode != null) 'mode': mode,
+          if (sizeClass != null) 'sizeClass': sizeClass,
         },
       );
       return PfzZonesResponse.fromJson(response.data as Map<String, dynamic>);

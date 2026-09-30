@@ -155,6 +155,17 @@ class _SpeciesRow extends StatelessWidget {
   final PfzSpeciesResult result;
   const _SpeciesRow({required this.result});
 
+  /// e.g. "feeding · large fish · central_med" — only the parts the backend
+  /// actually applied, so the row never implies a mode it was not scored under.
+  String? get _contextLabel {
+    final parts = <String>[
+      if (result.mode != null) result.mode!.replaceAll('_', ' '),
+      if (result.sizeClass != null) '${result.sizeClass} fish',
+      if (result.region != null) result.region!.replaceAll('_', ' '),
+    ];
+    return parts.isEmpty ? null : parts.join(' · ');
+  }
+
   @override
   Widget build(BuildContext context) {
     final pfz = result.pfz;
@@ -184,6 +195,19 @@ class _SpeciesRow extends StatelessWidget {
                       style: const TextStyle(
                           color: AppColors.darkTextHint, fontSize: 10),
                     ),
+                    // The model that produced the number. Bluefin feeding and
+                    // spawning are near-inverted, so "72/100" is meaningless
+                    // without knowing which one the user is looking at — and the
+                    // size class is the difference between a band that was
+                    // fitted and one that was not.
+                    if (_contextLabel != null)
+                      Text(
+                        _contextLabel!,
+                        style: const TextStyle(
+                            color: AppColors.darkTextMuted,
+                            fontSize: 10,
+                            fontStyle: FontStyle.italic),
+                      ),
                   ],
                 ),
               ),

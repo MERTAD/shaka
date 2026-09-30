@@ -42,7 +42,7 @@ object PfzFactors {
      * band describes depth below the surface, so seafloor depth is not a
      * constraint and must never gate or score them.
      */
-    fun depth(profile: SpeciesProfile, obs: PfzObservation): FactorOutcome {
+    fun depth(profile: ResolvedProfile, obs: PfzObservation): FactorOutcome {
         val spec = profile.depth
 
         // Water-column species (bluefin, little tunny, swordfish) live in the
@@ -82,11 +82,12 @@ object PfzFactors {
      *
      * A region-specific band wins over the basin-wide one when the profile
      * declares one, because several species have materially different thermal
-     * optima between the north-western Mediterranean and the Maghreb.
+     * optima between the north-western Mediterranean and the Maghreb. That
+     * override has already been applied by [SpeciesProfile.resolve], so this
+     * reads a single resolved band and does not re-derive the region.
      */
-    fun sst(profile: SpeciesProfile, obs: PfzObservation): FactorOutcome {
-        val (spec, _) = PfzRegions.resolveSst(profile, obs.region ?: obs.spotId)
-            ?: return FactorOutcome.Missing("no SST band for species")
+    fun sst(profile: ResolvedProfile, obs: PfzObservation): FactorOutcome {
+        val spec = profile.sstC ?: return FactorOutcome.Missing("no SST band for species")
         val t = obs.waterTempC ?: return FactorOutcome.Missing("no water temperature measured")
         return scoreBand(spec, t, "sst")
     }
@@ -138,7 +139,7 @@ object PfzFactors {
         )
     }
 
-    fun chlorophyll(profile: SpeciesProfile, obs: PfzObservation): FactorOutcome {
+    fun chlorophyll(profile: ResolvedProfile, obs: PfzObservation): FactorOutcome {
         val spec = profile.chlMgM3 ?: return FactorOutcome.Missing("no chlorophyll band for species")
         val c = obs.chlorophyllMgM3
             ?: return FactorOutcome.Missing("no chlorophyll measurement")
@@ -233,7 +234,7 @@ object PfzFactors {
      * path fabricates swell fallbacks, so a null here means the caller has no
      * trustworthy value and the factor is excluded.
      */
-    fun wind(profile: SpeciesProfile, obs: PfzObservation): FactorOutcome {
+    fun wind(profile: ResolvedProfile, obs: PfzObservation): FactorOutcome {
         val w = obs.windSpeedKmh ?: return FactorOutcome.Missing("no wind speed measured")
         val max = profile.windKmhMax ?: DEFAULT_WIND_KMH_MAX
         if (w > max) {
@@ -247,7 +248,7 @@ object PfzFactors {
         )
     }
 
-    fun swell(profile: SpeciesProfile, obs: PfzObservation): FactorOutcome {
+    fun swell(profile: ResolvedProfile, obs: PfzObservation): FactorOutcome {
         val s = obs.swellHeightM ?: return FactorOutcome.Missing("no swell height measured")
         val max = profile.swellMMax ?: DEFAULT_SWELL_M_MAX
         if (s > max) {
@@ -268,7 +269,7 @@ object PfzFactors {
      * currently mapped into [com.shaka.model.OceanData], so this always reports
      * Missing rather than guessing.
      */
-    fun current(profile: SpeciesProfile, obs: PfzObservation): FactorOutcome {
+    fun current(profile: ResolvedProfile, obs: PfzObservation): FactorOutcome {
         val max = profile.oceanCurrentKmhMax
             ?: return FactorOutcome.Missing("no current threshold for species")
         val v = obs.oceanCurrentVelocityKmh
@@ -277,6 +278,123 @@ object PfzFactors {
             return FactorOutcome.Gated("current: ${fmt(v)}km/h exceeds ${fmt(max)}km/h")
         }
         return FactorOutcome.Scored(descending(v, 0.0, max), profile.depth.conf)
+    }
+
+    // ------------------------------------------------- v2 benthic and mesoscale
+
+    /**
+     * Potential temperature at the sea floor, °C (Copernicus `bottomT`).
+     *
+     * This is the term that makes a demersal profile a demersal profile. Colloca
+     * et al. (2014) give a 5–95 percentile SBT band of 11.78–15.04 °C with a
+     * 13.8 ± 1 °C optimum for high-recruitment cells, and Lleonart (2001)
+     * independently reports young hake absent from the north-western
+     * Mediterranean wherever the bottom exceeds 15 °C — so above the band the
+     * species is *absent*, not merely discouraged, and this gates.
+     *
+     * Note the consequence for red shrimp, whose cited band is 13.6–13.8 °C
+     * (Maiorano et al. 2020): that band is only 0.2 °C wide, so it gates
+     * hard almost everywhere. That is the correct reading — the band
+     * describes Levantine Intermediate Water, and the species' absence outside
+     * the central basins is what the narrow gate is detecting.
+     */
+    fun bottomTemp(profile: ResolvedProfile, obs: PfzObservation): FactorOutcome {
+        val spec = profile.bottomTempC
+            ?: return FactorOutcome.Missing("no bottom temperature band for species")
+        val t = obs.bottomTempC
+            ?: return FactorOutcome.Missing("no bottom temperature measured")
+        return scoreBand(spec, t, "bottom_temp")
+    }
+
+    /**
+     * Practical salinity at the sea floor, psu, from the deepest non-masked
+     * level of Copernicus `so`.
+     *
+     * Red shrimp are the only pilot species scored on this, for the same reason
+     * as [bottomTemp]: their 38.1–38.5 psu band identifies Levantine
+     * Intermediate Water. Measured live at 38.51–38.60 psu off the Balearic
+     * abyssal plain, which is already outside it — consistent with the region
+     * gate, not contradicting it.
+     */
+    fun bottomSalinity(profile: ResolvedProfile, obs: PfzObservation): FactorOutcome {
+        val spec = profile.bottomSalinityPsu
+            ?: return FactorOutcome.Missing("no bottom salinity band for species")
+        val s = obs.bottomSalinityPsu
+            ?: return FactorOutcome.Missing("no bottom salinity measured")
+        return scoreBand(spec, s, "bottom_salinity")
+    }
+
+    /**
+     * Bottom current speed, m/s, from the deepest non-masked level of
+     * Copernicus `uo`/`vo`.
+     *
+     * Deliberately m/s, not km/h: Colloca et al. (2014) fit hake recruitment to
+     * a maximum bottom current of 0.034 m/s, and a unit slip here silently
+     * turns a passing cell into a gated one (0.034 m/s is 0.12 km/h). The
+     * threshold is an upper limit, so this is LOWER_BETTER across the band.
+     */
+    fun bottomCurrent(profile: ResolvedProfile, obs: PfzObservation): FactorOutcome {
+        val spec = profile.bottomCurrentMs
+            ?: return FactorOutcome.Missing("no bottom current band for species")
+        val v = obs.bottomCurrentMs
+            ?: return FactorOutcome.Missing("no bottom current measured")
+        return scoreBand(spec, v, "bottom_current")
+    }
+
+    /**
+     * Mixed layer thickness, m, from Copernicus `mlotst` (de Boyer Montégut 2004).
+     *
+     * A thin mixed layer concentrates the surface thermal structure a
+     * stratification-dependent feeder is looking for. None of the five pilot
+     * species is currently gated on it, so the evaluator exists for the 22
+     * profiles still to be migrated rather than for a band that is already
+     * declared.
+     */
+    fun mld(profile: ResolvedProfile, obs: PfzObservation): FactorOutcome {
+        val spec = profile.mldM ?: return FactorOutcome.Missing("no mixed layer band for species")
+        val d = obs.mldM ?: return FactorOutcome.Missing("no mixed layer depth measured")
+        return scoreBand(spec, d, "mld")
+    }
+
+    /**
+     * Sea surface height anomaly, m — DERIVED as daily `zos` minus the monthly
+     * mean `zos`, because this product's static dataset publishes no `mdt`.
+     *
+     * Druon et al. (2016) put bluefin *feeding* clusters at SSHa >= -0.10 m. That
+     * is a threshold, not a gradient, so the band is declared HIGHER_BETTER over
+     * -0.10..0.0: below -0.10 m the cell is gated (the feature is absent), and at
+     * or above it the score saturates at 100. A decline above the threshold would
+     * be a response curve the paper does not contain, so there is none.
+     *
+     * **Known limitation, measured not assumed.** This factor barely varies
+     * between cells: 18 mm of spread across a 9 km box but 276 mm across a
+     * 5x8 degree one. In zone analysis it will therefore behave as a regional
+     * gate that is constant across the requested box unless a wider mesoscale
+     * window is fetched. It is a legitimate required factor — Druon needed it to
+     * de-confound SSHa from SST — but it must not be mistaken for a local one.
+     */
+    fun sshAnomaly(profile: ResolvedProfile, obs: PfzObservation): FactorOutcome {
+        val spec = profile.sshAnomalyM
+            ?: return FactorOutcome.Missing("no SSH anomaly band for species")
+        val a = obs.sshAnomalyM ?: return FactorOutcome.Missing("no SSH anomaly measured")
+        return scoreBand(spec, a, "ssh_anomaly")
+    }
+
+    /**
+     * 30-day change in sea surface temperature, °C (Druon et al.'s dSST30), and
+     * also derived by us from the SST series.
+     *
+     * Bluefin *spawning* is associated with a high positive dSST30 — spring
+     * stratification building up. The paper says "high" and gives no number, so
+     * the band is EXPERT tier: the 0 °C floor is defensible (cooling is not the
+     * documented condition) and the upper end is this app's assumption about how
+     * much 30-day warming a Mediterranean spring produces.
+     */
+    fun sstWarming(profile: ResolvedProfile, obs: PfzObservation): FactorOutcome {
+        val spec = profile.sstWarmingC
+            ?: return FactorOutcome.Missing("no SST warming band for species")
+        val w = obs.sstWarmingC ?: return FactorOutcome.Missing("no SST trend measured")
+        return scoreBand(spec, w, "sst_warming")
     }
 
     // -------------------------------------------------------------- solunar
@@ -326,7 +444,7 @@ object PfzFactors {
      * circular distance from the nearest peak month, so December and January
      * wrap correctly around a January peak.
      */
-    fun season(profile: SpeciesProfile, obs: PfzObservation): FactorOutcome {
+    fun season(profile: ResolvedProfile, obs: PfzObservation): FactorOutcome {
         val spec = profile.season
             ?: return FactorOutcome.Missing("no season data for species")
         if (spec.peakMonths.isEmpty()) {
@@ -335,7 +453,7 @@ object PfzFactors {
 
         val month = obs.date.monthValue
         if (month in spec.closedMonths) {
-            return FactorOutcome.Gated("season: month $month is a closed month for ${profile.id}")
+            return FactorOutcome.Gated("season: month $month is a closed month for ${profile.profile.id}")
         }
 
         val distance = spec.peakMonths.minOf { circularMonthDistance(month, it) }

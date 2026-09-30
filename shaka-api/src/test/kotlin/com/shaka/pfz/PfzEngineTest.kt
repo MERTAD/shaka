@@ -15,7 +15,15 @@ class PfzEngineTest {
     private val today = LocalDate.now()
     private val july = LocalDate.of(2026, 7, 14)
 
-    /** A fully-populated summer observation at a 30 m rock. */
+    /**
+     * A corridor-complete summer observation at a 30 m rock.
+     *
+     * "Complete" now includes the two derived mesoscale fields, because bluefin
+     * feeding declares `chla_gradient` and `ssh_anomaly` REQUIRED: without them
+     * the result is `insufficient_data` by design, so a fixture that omitted them
+     * could not exercise any scoring behaviour at all. Use [bareObs] to test the
+     * missing-data paths.
+     */
     private fun goodObs(
         spotId: String = "sicily-ustica-north",
         depthM: Double? = 30.0,
@@ -34,7 +42,59 @@ class PfzEngineTest {
         swellHeightM = swell,
         solunarDayRating = 5,
         moonPhase = "new_moon",
+        // Strong chlorophyll front, and a NEGATIVE SSH anomaly: both resolved real
+        // measurements, so the required factors are satisfied rather than
+        // accidentally absent. The sign matters. The cited feeding window is
+        // -0.10..0.0 m — cyclonic, depressed sea level is where the fronts and
+        // the prey concentrate — so a positive anomaly is outside the evidence
+        // and is correctly refused rather than scored.
+        chlaGradient = 0.4,
+        sshAnomalyM = -0.02,
+        // Only the spawning mode weighs this, but the fixture is complete for
+        // both modes so a mode switch is the only thing a test varies.
+        sstWarmingC = 0.8,
         region = "sicily"
+    )
+
+    /** A summer observation with no ocean corridor at all: the missing-data case. */
+    private fun bareObs(
+        spotId: String = "sicily-ustica-north",
+        depthM: Double? = 30.0,
+        sst: Double? = 24.0
+    ) = PfzObservation(
+        spotId = spotId,
+        date = july,
+        depthM = depthM,
+        waterTempC = sst,
+        region = "sicily"
+    )
+
+    /**
+     * A demersal observation on the slope these species actually occupy, with
+     * the benthic measurements their cited envelopes are written from.
+     *
+     * [depthM] defaults into the red shrimp band; the hake's cited gate is much
+     * shallower, so its tests pass their own depth rather than inheriting this.
+     */
+    private fun slopeObs(
+        spotId: String = "sicily-ustica-north",
+        depthM: Double = 500.0,
+        region: String? = "sicily",
+        bottomTempC: Double? = 13.7,
+        bottomSalinityPsu: Double? = 38.3,
+        bottomCurrentMs: Double? = 0.01
+    ) = PfzObservation(
+        spotId = spotId,
+        date = july,
+        depthM = depthM,
+        depthSource = "ncei_dem",
+        waterTempC = 20.0,
+        bottomTempC = bottomTempC,
+        bottomSalinityPsu = bottomSalinityPsu,
+        bottomCurrentMs = bottomCurrentMs,
+        mldM = 40.0,
+        windSpeedKmh = 8.0,
+        region = region
     )
 
     private fun profile(id: String): SpeciesProfile =
@@ -60,6 +120,31 @@ class PfzEngineTest {
             assertTrue(
                 abs(normalized.values.sum() - 1.0) < 0.0001,
                 "${p.id} normalized weights sum to ${normalized.values.sum()}"
+            )
+            // A mode replaces the base weights outright, so a mode whose weights
+            // do not sum to 1 silently rescales the whole species score.
+            for (m in p.modes) {
+                assertTrue(
+                    abs(m.weights.values.sum() - 1.0) < 0.001,
+                    "${p.id}/${m.id} weights sum to ${m.weights.values.sum()}"
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `a default mode does not leave a divergent copy of the base weights`() {
+        // The base weights are dead for any species with a default mode, because
+        // SpeciesProfile.resolve() takes the mode's weights. Two copies of the
+        // same number in one profile is a drift bug waiting to happen, so they
+        // are required to agree.
+        for (p in PfzSpeciesRegistry.all()) {
+            val mode = p.defaultMode() ?: continue
+            if (mode.weights.isEmpty()) continue
+            assertEquals(
+                p.weights,
+                mode.weights,
+                "${p.id}: base weights differ from its default mode '${mode.id}'"
             )
         }
     }
@@ -225,10 +310,12 @@ class PfzEngineTest {
 
     @Test
     fun `closed season gates the species`() {
-        val bluefin = profile("bluefin_tuna").copy(
+        // sardine, not bluefin: bluefin's season now lives in its MODES, so
+        // patching the base season would test nothing.
+        val sardine = profile("sardine").copy(
             season = SeasonSpec(peakMonths = listOf(6, 7, 8), closedMonths = listOf(2))
         )
-        val winter = PfzEngine.evaluateSpecies(bluefin, goodObs().copy(date = LocalDate.of(2026, 2, 10)))
+        val winter = PfzEngine.evaluateSpecies(sardine, bareObs().copy(date = LocalDate.of(2026, 2, 10)))
         assertEquals(PfzStatus.UNAVAILABLE, winter.status)
         assertTrue(winter.blockers.any { it.startsWith("season:") }, "got ${winter.blockers}")
     }
@@ -249,12 +336,15 @@ class PfzEngineTest {
 
     @Test
     fun `missing factors are dropped and remaining weights renormalized to one`() {
-        // Bluefin at a known depth and temperature, but no wind, swell, chl or solunar.
-        val partial = PfzObservation(
-            spotId = "sicily-ustica-north",
-            date = july,
-            depthM = 30.0,
-            waterTempC = 18.0
+        // Bluefin feeding, with its two REQUIRED factors resolved, but no wind,
+        // swell, chl or solunar. The optional gaps renormalize; the required ones
+        // would have returned insufficient_data instead.
+        val partial = goodObs(sst = 18.0).copy(
+            windSpeedKmh = null,
+            swellHeightM = null,
+            solunarDayRating = null,
+            moonPhase = null,
+            chlorophyllMgM3 = null
         )
         val result = PfzEngine.evaluateSpecies(profile("bluefin_tuna"), partial)
 
@@ -265,10 +355,65 @@ class PfzEngineTest {
         assertTrue(result.missingFactors.contains(PfzFactor.WIND))
         assertTrue(result.missingFactors.contains(PfzFactor.SWELL))
         assertTrue(result.missingFactors.contains(PfzFactor.SOLUNAR))
+        assertTrue(result.missingFactors.contains(PfzFactor.CHL))
 
-        // sst is ideal here (and depth is dropped as bathymetry does not apply
-        // to this water-column species), so the renormalized score is 100.
-        assertEquals(100, result.pfz)
+        // Every factor that did resolve is at or near its best for this cell, so
+        // nothing was scored as a pessimistic stand-in for the gaps. The SSH
+        // anomaly of -0.02 m sits a fifth of the way up the cited -0.10..0.0
+        // window, so it scores 80 by design — the assertion is a floor, not an
+        // exact number, so it keeps holding if a band is re-cited.
+        assertTrue(
+            result.factors.all { it.score >= 80 },
+            "a resolved factor must not be scored as a placeholder: ${result.factors}"
+        )
+    }
+
+    @Test
+    fun `a required factor that did not resolve refuses the whole score`() {
+        // The hake's cited habitat equation is a product, so this is the case the
+        // mechanism exists for: depth + chlorophyll are known, bottom temperature
+        // is not, and the answer must not be a number.
+        val hake = profile("european_hake")
+        val withoutBottomT = slopeObs(depthM = 300.0, bottomTempC = null)
+        val result = PfzEngine.evaluateSpecies(hake, withoutBottomT)
+
+        assertEquals(PfzStatus.INSUFFICIENT_DATA, result.status)
+        assertNull(result.pfz, "a partial product model must not produce a score")
+        assertTrue(
+            result.blockers.any { it.contains(PfzFactor.BOTTOM_TEMP) && it.contains("required") },
+            "the blocker must name the required factor, got ${result.blockers}"
+        )
+        assertTrue(
+            result.missingFactors.contains(PfzFactor.BOTTOM_TEMP),
+            "and the gap must be visible in missingFactors, got ${result.missingFactors}"
+        )
+    }
+
+    @Test
+    fun `every declared required factor is genuinely load-bearing`() {
+        for (p in PfzSpeciesRegistry.all()) {
+            for (factor in p.requiredFactors) {
+                val resolution = p.resolve()
+                assertTrue(
+                    resolution.definesFactor(factor),
+                    "${p.id} requires '$factor' but declares no band for it, so it " +
+                        "could never resolve and every score would be insufficient_data"
+                )
+                assertTrue(
+                    resolution.normalizedWeights().containsKey(factor),
+                    "${p.id} requires '$factor' but assigns it no weight, so requiring " +
+                        "it would be a veto on a factor that does not affect the score"
+                )
+            }
+            for (m in p.modes) {
+                for (factor in m.requiredFactors) {
+                    assertTrue(
+                        p.resolve(m.id).definesFactor(factor),
+                        "${p.id}/${m.id} requires '$factor' but declares no band for it"
+                    )
+                }
+            }
+        }
     }
 
     @Test
@@ -313,6 +458,66 @@ class PfzEngineTest {
         assertEquals(PfzRegions.WESTERN, PfzRegions.classify("France-Nice"))
         assertNull(PfzRegions.classify(null))
         assertNull(PfzRegions.classify("hawaii-kona"))
+    }
+
+    @Test
+    fun `a position classifies when the id carries no known prefix`() {
+        // Offshore corridor cells have no spot id at all, so a position has to be
+        // enough on its own.
+        assertEquals(PfzRegions.WESTERN, PfzRegions.classify("offshore-91", lat = 38.0, lon = 4.0))
+        assertEquals(PfzRegions.MAGHREB, PfzRegions.classify("offshore-92", lat = 36.0, lon = 5.0))
+        assertEquals(PfzRegions.MAGHREB, PfzRegions.classify("offshore-93", lat = 33.0, lon = 12.0))
+        assertEquals(PfzRegions.CENTRAL, PfzRegions.classify("offshore-94", lat = 37.0, lon = 14.0))
+        assertEquals(PfzRegions.EASTERN, PfzRegions.classify("offshore-95", lat = 35.0, lon = 25.0))
+    }
+
+    @Test
+    fun `positions outside the mediterranean are not classified`() {
+        // The classifier must refuse rather than guess: the Atlantic and the Black
+        // Sea are not Mediterranean even though the fallbacks would place them.
+        assertNull(PfzRegions.classify(null, lat = 44.0, lon = -10.0), "open Atlantic")
+        assertNull(PfzRegions.classify(null, lat = 45.0, lon = 30.0), "Black Sea")
+        assertNull(PfzRegions.classify(null, lat = 20.0, lon = 15.0), "Sahara")
+        assertNull(PfzRegions.classify(null, lat = 40.0), "latitude without a longitude")
+        assertNull(PfzRegions.classify(null, lon = 5.0), "longitude without a latitude")
+    }
+
+    @Test
+    fun `an explicit named region outranks both the id prefix and the position`() {
+        // Sicily is central, but the water off its south coast is Tunisian and
+        // the Strait of Gibraltar is not Maghreb. The name is the curated answer.
+        assertEquals(PfzRegions.MAGHREB, PfzRegions.classify("sicily-ustica-north", region = "maghreb"))
+        assertEquals(
+            PfzRegions.EASTERN,
+            PfzRegions.classify("sicily-ustica-north", lat = 37.5, lon = 12.0, region = "eastern_med")
+        )
+        // An unknown name falls through to the prefix/position chain rather than
+        // becoming a region of its own.
+        assertEquals(
+            PfzRegions.CENTRAL,
+            PfzRegions.classify("sicily-ustica-north", region = "atlantis")
+        )
+    }
+
+    @Test
+    fun `a known spot id outranks a disagreeing position`() {
+        // Guards against the Alboran-Sardinian back-merge: a box that cuts
+        // 8E would put the Sardinian approaches in the east, but the curated
+        // prefix is authoritative.
+        assertEquals(
+            PfzRegions.WESTERN,
+            PfzRegions.classify("spain-medes", lat = 41.0, lon = 8.0)
+        )
+        assertEquals(
+            PfzRegions.CENTRAL,
+            PfzRegions.classify("sicily-ustica-north", lat = 36.0, lon = 2.0)
+        )
+    }
+
+    @Test
+    fun `a partial position is not classified from half the information`() {
+        assertNull(PfzRegions.classify("offshore-96", lat = 38.0))
+        assertNull(PfzRegions.classify("offshore-96", lon = 4.0))
     }
 
     @Test
@@ -388,12 +593,16 @@ class PfzEngineTest {
             )
         }
 
-        // Both deep crustaceans must be present and gated at a 30 m spot.
+        // The deep crustaceans and the hake must all be present and gated at a
+        // 30 m spot. Hake is now in that set for a cited reason: Colloca et al.
+        // (2014) fit its habitat as depth (60-385 m) x bottom temperature, and
+        // every one of the 67 inventory spots is a nominal 20-30 m coastal site,
+        // so the roster has no ground to score hake against.
         val gated = response.species.filter { it.status == PfzStatus.UNAVAILABLE }
         assertEquals(
-            setOf("deep_rose_shrimp", "red_shrimp"),
+            setOf("deep_rose_shrimp", "red_shrimp", "european_hake"),
             gated.map { it.id }.toSet(),
-            "only the deep crustaceans should be gated at 30 m"
+            "only the depth-gated species should be gated at 30 m"
         )
         assertTrue(gated.all { it.pfz == null }, "gated species must carry no numeric score")
 
@@ -413,8 +622,12 @@ class PfzEngineTest {
             "the missing chlorophyll gradient must be disclosed"
         )
         assertTrue(
-            response.coverageNotes.any { it.contains("BOTTOM") && it.contains("SURFACE") },
-            "the surface-vs-bottom temperature gap must be disclosed"
+            response.coverageNotes.any { it.contains("deepest non-masked level") },
+            "the surface-vs-bottom sampling caveat must be disclosed"
+        )
+        assertTrue(
+            response.coverageNotes.any { it.contains("DERIVED by Shaka") },
+            "the derived — not published — mesoscale fields must be disclosed"
         )
     }
 
@@ -453,17 +666,37 @@ class PfzEngineTest {
     // ------------------------- bottom temperature must not become an SST gate
 
     @Test
-    fun `demersal species with bottom-temperature evidence define no sst band`() {
+    fun `demersal species with bottom-temperature evidence score bottom temperature, not sst`() {
         // Regression guard. The cited thermal ranges for these species are BOTTOM
         // temperatures measured at depth (hake 11.8-15.0C at 38-312m, Bousquet 2015;
-        // Mullus 13.6-23.8C at 28-310m, Machias 1998). The app only measures
-        // SURFACE temperature, so promoting those ranges to an sstC gate would
-        // fabricate a constraint the data cannot support.
-        val bottomOnly = listOf("european_hake", "red_mullet", "striped_red_mullet")
+        // Mullus 13.6-23.8C at 28-310m, Machias 1998). The app now measures bottom
+        // temperature directly, so the hake's range moves onto `bottomTempC`. It
+        // must still NOT be promoted to an `sstC` gate: the two are different
+        // water masses and a surface reading cannot stand in for the slope.
+        val hake = profile("european_hake")
+        assertNull(hake.sstC, "hake must not define a surface sstC band")
+        assertNotNull(
+            hake.bottomTempC,
+            "hake's cited 11.8-15.0C must now be scored against measured bottom temperature"
+        )
 
-        for (id in bottomOnly) {
+        // With the required bottom temperature absent, the hake refuses rather
+        // than falling back to any surface reading.
+        val noBottom = PfzEngine.evaluateSpecies(hake, slopeObs(depthM = 300.0, bottomTempC = null))
+        assertEquals(PfzStatus.INSUFFICIENT_DATA, noBottom.status)
+        assertTrue(noBottom.blockers.any { it.contains("bottom_temp") }, "got ${noBottom.blockers}")
+
+        // Wrong bottom temperature is a real gate, not a missing measurement.
+        val tooWarm = PfzEngine.evaluateSpecies(hake, slopeObs(depthM = 300.0, bottomTempC = 19.0))
+        assertEquals(PfzStatus.UNAVAILABLE, tooWarm.status)
+        assertTrue(tooWarm.blockers.any { it.contains("bottom_temp") }, "got ${tooWarm.blockers}")
+
+        // The two mullets have no cited bottom band yet, so they must say so
+        // rather than quietly inherit the hake's.
+        for (id in listOf("red_mullet", "striped_red_mullet")) {
             val p = profile(id)
             assertNull(p.sstC, "$id must not define a surface sstC band")
+            assertNull(p.bottomTempC, "$id has no cited bottom band")
             assertTrue(
                 p.unscorableRequirements.any { it.contains("Bottom temperature") },
                 "$id must disclose the unscored bottom-temperature requirement"
@@ -490,9 +723,14 @@ class PfzEngineTest {
     // ------------------------------------- gradCHL: the factor we cannot measure
 
     @Test
-    fun `bluefin reports the chlorophyll gradient it cannot measure`() {
-        val result = PfzEngine.evaluateSpecies(profile("bluefin_tuna"), goodObs())
+    fun `an unresolved chlorophyll gradient refuses the bluefin feeding score`() {
+        // The gradient is the documented feeding driver (Druon et al. 2011) and is
+        // REQUIRED, so the honest answer at a spot with no resolved L4 grid is a
+        // refusal that names the driver — not a temperature lookup.
+        val result = PfzEngine.evaluateSpecies(profile("bluefin_tuna"), bareObs())
 
+        assertEquals(PfzStatus.INSUFFICIENT_DATA, result.status)
+        assertNull(result.pfz, "a bluefin score without gradCHL would be a different model")
         assertTrue(
             result.missingFactors.contains(PfzFactor.CHLA_GRADIENT),
             "Druon's actual feeding driver must be named as unmeasured, got ${result.missingFactors}"
@@ -500,42 +738,36 @@ class PfzEngineTest {
     }
 
     @Test
-    fun `a measured gradient raises bluefin confidence`() {
+    fun `a measured gradient is scored, not merely disclosed`() {
         val bluefin = profile("bluefin_tuna")
+        val weak = PfzEngine.evaluateSpecies(bluefin, goodObs().copy(chlaGradient = 0.0))
+        val strong = PfzEngine.evaluateSpecies(bluefin, goodObs().copy(chlaGradient = 0.8))
 
-        val without = PfzEngine.evaluateSpecies(bluefin, goodObs())
-        val with_ = PfzEngine.evaluateSpecies(
-            bluefin,
-            goodObs().copy(chlaGradient = 0.35)
-        )
-
-        assertEquals(PfzStatus.SCOREABLE, with_.status)
+        assertEquals(PfzStatus.SCOREABLE, strong.status)
+        // It is now a required, weighted factor, so a stronger front must actually
+        // move the score rather than only raising confidence.
         assertTrue(
-            with_.confidence > without.confidence,
-            "resolving the documented driver must raise confidence: " +
-                "${without.confidence} -> ${with_.confidence}"
-        )
-        // A supplied gradient is SCORED, so it leaves missingFactors. But it has
-        // no cited band, so it must show up as low-confidence instead — the
-        // caller learns we measured it and that we have no threshold for it.
-        assertTrue(
-            !with_.missingFactors.contains(PfzFactor.CHLA_GRADIENT),
-            "a resolved factor is no longer missing, got ${with_.missingFactors}"
+            strong.pfz!! > weak.pfz!!,
+            "a stronger chlorophyll front must score higher: ${weak.pfz} -> ${strong.pfz}"
         )
         assertTrue(
-            with_.lowConfidenceFactors.contains(PfzFactor.CHLA_GRADIENT),
-            "an unbanded gradient must be flagged EXPERT, got ${with_.lowConfidenceFactors}"
+            !strong.missingFactors.contains(PfzFactor.CHLA_GRADIENT),
+            "a resolved factor is no longer missing, got ${strong.missingFactors}"
         )
     }
 
     @Test
-    fun `the unavailable gradient is disclosed at response level, not just per species`() {
-        // It is the only factor in the roster that nothing can score, so it
-        // should surface in the response-wide missing list too.
-        val response = PfzEngine.evaluate(goodObs())
+    fun `a missing required factor is disclosed at response level too`() {
+        // A spot with no corridor at all: the gaps must surface in the
+        // response-wide missing list, not only inside the failing species.
+        val response = PfzEngine.evaluate(bareObs())
         assertTrue(
             response.missingFactors.contains(PfzFactor.CHLA_GRADIENT),
             "expected a response-wide chla_gradient gap, got ${response.missingFactors}"
+        )
+        assertTrue(
+            response.species.any { it.status == PfzStatus.INSUFFICIENT_DATA },
+            "the roster must not report a confident answer with no ocean data"
         )
     }
 
@@ -602,14 +834,317 @@ class PfzEngineTest {
 
     @Test
     fun `sst anomaly scoring is monotonic in magnitude`() {
-        val weak = PfzEngine.evaluateSpecies(profile("bluefin_tuna"), goodObs().copy(sstAnomalyC = 0.1))
-        val strong = PfzEngine.evaluateSpecies(profile("bluefin_tuna"), goodObs().copy(sstAnomalyC = 2.5))
+        // Now a unit test of the evaluator, not of bluefin: the feeding model
+        // weights chla_gradient and ssh_anomaly, which are the cited front
+        // signals, so it deliberately does not also weight the surface anomaly.
+        val weak = (PfzFactors.sstAnomaly(bareObs(sst = 20.0).copy(sstAnomalyC = 0.1)) as FactorOutcome.Scored).score
+        val strong = (PfzFactors.sstAnomaly(bareObs(sst = 20.0).copy(sstAnomalyC = 2.5)) as FactorOutcome.Scored).score
 
-        val weakScore = weak.factors.first { it.factor == PfzFactor.SST_ANOMALY }.score
-        val strongScore = strong.factors.first { it.factor == PfzFactor.SST_ANOMALY }.score
         assertTrue(
-            strongScore > weakScore,
-            "a larger |anomaly| is a stronger dynamic signal: $weakScore -> $strongScore"
+            strong > weak,
+            "a larger |anomaly| is a stronger dynamic signal: $weak -> $strong"
         )
+    }
+
+    // ------------------------------------------------------- required: ssh anomaly
+
+    @Test
+    fun `a missing ssh anomaly refuses the bluefin feeding score`() {
+        // SSH is the second of bluefin feeding's two required factors: the
+        // derived anomaly is the mesoscale signal behind Druon's frontal
+        // aggregation, so a warm SST alone must not produce a feeding score.
+        val noSsh = PfzEngine.evaluateSpecies(
+            profile("bluefin_tuna"),
+            goodObs().copy(sshAnomalyM = null)
+        )
+        assertEquals(PfzStatus.INSUFFICIENT_DATA, noSsh.status)
+        assertTrue(
+            noSsh.blockers.any { it.contains(PfzFactor.SSH_ANOMALY) && it.contains("required") },
+            "got ${noSsh.blockers}"
+        )
+    }
+
+    @Test
+    fun `bluefin refuses a negative ssh anomaly it cannot explain`() {
+        // Outside the cited -0.10..0.0 m window the animal is on the wrong side
+        // of the feature. That is a known out-of-range value, not missing data.
+        val result = PfzEngine.evaluateSpecies(
+            profile("bluefin_tuna"),
+            goodObs().copy(sshAnomalyM = -0.25)
+        )
+        assertEquals(PfzStatus.UNAVAILABLE, result.status)
+        assertTrue(result.blockers.any { it.contains(PfzFactor.SSH_ANOMALY) }, "got ${result.blockers}")
+    }
+
+    // ------------------------------------------------------------- size classes
+
+    @Test
+    fun `an unparameterised size class is refused rather than borrowed`() {
+        // Bluefin is written for large fish only. Scoring a 20 kg juvenile with
+        // the large-fish thresholds would be a fabricated number.
+        val small = PfzEngine.evaluateSpecies(
+            profile("bluefin_tuna"),
+            goodObs(),
+            sizeClass = "small"
+        )
+        assertEquals(PfzStatus.INSUFFICIENT_DATA, small.status)
+        assertNull(small.pfz, "an unparameterised size class must not inherit another class's bands")
+        assertTrue(
+            small.blockers.any { it.contains("small") },
+            "the blocker must name the size class, got ${small.blockers}"
+        )
+    }
+
+    @Test
+    fun `the parameterised size class scores and is disclosed`() {
+        val large = PfzEngine.evaluateSpecies(profile("bluefin_tuna"), goodObs(), sizeClass = "large")
+        assertEquals(PfzStatus.SCOREABLE, large.status)
+        assertEquals("large", large.sizeClass, "the applied size class must reach the caller")
+
+        val unknown = PfzEngine.evaluateSpecies(
+            profile("bluefin_tuna"),
+            goodObs(),
+            sizeClass = "juvenile"
+        )
+        assertEquals(PfzStatus.INSUFFICIENT_DATA, unknown.status)
+    }
+
+    // ------------------------------------------------------------------- modes
+
+    @Test
+    fun `bluefin feeding and spawning invert the chlorophyll requirement`() {
+        // The single most important thing the mode switch gets right. The two
+        // cited windows are near-disjoint: feeding is parameterised over
+        // 0.02-20 mg/m3 with a 0.2-1.5 ideal, spawning over 0-0.15 with
+        // lower_better. So a rich cell is not merely worse for spawning, it is
+        // outside the documented envelope entirely.
+        val p = profile("bluefin_tuna")
+        val rich = goodObs(sst = 18.0, chl = 0.9)
+
+        val feeding = PfzEngine.evaluateSpecies(p, rich, mode = "feeding")
+        assertEquals(PfzStatus.SCOREABLE, feeding.status)
+
+        val spawningInRichWater = PfzEngine.evaluateSpecies(p, rich, mode = "spawning")
+        assertEquals(
+            PfzStatus.UNAVAILABLE,
+            spawningInRichWater.status,
+            "0.9 mg/m3 is outside the cited 0-0.15 spawning window"
+        )
+        assertTrue(
+            spawningInRichWater.blockers.any { it.startsWith("chl:") },
+            "got ${spawningInRichWater.blockers}"
+        )
+
+        // Inside the narrow overlap the preference really does invert: the same
+        // oligotrophic cell scores the chl factor higher for spawning.
+        val oligotrophic = goodObs(sst = 18.0, chl = 0.08)
+        val f = PfzEngine.evaluateSpecies(p, oligotrophic, mode = "feeding")
+        val s = PfzEngine.evaluateSpecies(p, oligotrophic, mode = "spawning")
+        assertEquals(PfzStatus.SCOREABLE, f.status)
+        assertEquals(PfzStatus.SCOREABLE, s.status)
+        assertTrue(
+            s.factors.first { it.factor == PfzFactor.CHL }.score >
+                f.factors.first { it.factor == PfzFactor.CHL }.score,
+            "a chlorophyll-poor cell must favour spawning on the chl factor"
+        )
+    }
+
+    @Test
+    fun `a known mode is used and an unknown mode falls back to the default`() {
+        val p = profile("bluefin_tuna")
+        assertEquals("feeding", PfzEngine.evaluateSpecies(p, goodObs()).mode)
+        assertEquals(
+            "spawning",
+            PfzEngine.evaluateSpecies(p, goodObs(sst = 18.0, chl = 0.08), mode = "spawning").mode
+        )
+        // An unrecognised mode is a client typo, not a reason to refuse the fish.
+        val typo = PfzEngine.evaluateSpecies(p, goodObs(), mode = "spawnning")
+        assertEquals("feeding", typo.mode, "an unknown mode must fall back to the default")
+    }
+
+    @Test
+    fun `spawning declares sst warming as required`() {
+        // Corridor-wide warming is the cue the stock responds to, so a spot
+        // without a resolved dSST30 cannot be called a spawning ground. Kept
+        // inside the cited spawning chlorophyll window so the missing factor, not
+        // the chl gate, is what the test exercises.
+        val cold = PfzEngine.evaluateSpecies(
+            profile("bluefin_tuna"),
+            goodObs(sst = 18.0, chl = 0.08).copy(sstWarmingC = null),
+            mode = "spawning"
+        )
+        assertEquals(PfzStatus.INSUFFICIENT_DATA, cold.status)
+        assertTrue(
+            cold.blockers.any { it.contains(PfzFactor.SST_WARMING) && it.contains("required") },
+            "got ${cold.blockers}"
+        )
+    }
+
+    // ----------------------------------------------------------- region exclusions
+
+    @Test
+    fun `red shrimp is excluded from the western mediterranean`() {
+        // The cited thermal and salinity envelope is Levantine Intermediate
+        // Water, which is not formed in the Alboran Sea. A numeric score there
+        // would contradict the source, so it is a hard exclusion.
+        val western = PfzEngine.evaluateSpecies(
+            profile("red_shrimp"),
+            slopeObs(spotId = "spain-medes", region = "spain")
+        )
+        assertEquals(PfzStatus.UNAVAILABLE, western.status)
+        assertNull(western.pfz)
+        assertTrue(
+            western.blockers.any { it.contains("western_med") },
+            "the exclusion must name the region, got ${western.blockers}"
+        )
+    }
+
+    @Test
+    fun `red shrimp is excluded from the maghreb`() {
+        val maghreb = PfzEngine.evaluateSpecies(
+            profile("red_shrimp"),
+            slopeObs(spotId = "algeria-tipaza", region = "algeria")
+        )
+        assertEquals(PfzStatus.UNAVAILABLE, maghreb.status)
+        assertTrue(
+            maghreb.blockers.any { it.contains("maghreb") },
+            "the exclusion must name the region, got ${maghreb.blockers}"
+        )
+    }
+
+    @Test
+    fun `red shrimp scores inside its cited slope habitat`() {
+        val inHabitat = PfzEngine.evaluateSpecies(profile("red_shrimp"), slopeObs())
+        assertEquals(PfzStatus.SCOREABLE, inHabitat.status)
+        assertNotNull(inHabitat.pfz)
+        assertEquals(PfzRegions.CENTRAL, inHabitat.region, "the applied region must reach the caller")
+
+        val tooShallow = PfzEngine.evaluateSpecies(profile("red_shrimp"), slopeObs().copy(depthM = 30.0))
+        assertEquals(PfzStatus.UNAVAILABLE, tooShallow.status)
+
+        val tooWarm = PfzEngine.evaluateSpecies(profile("red_shrimp"), slopeObs(bottomTempC = 20.0))
+        assertEquals(PfzStatus.UNAVAILABLE, tooWarm.status)
+
+        val tooFresh = PfzEngine.evaluateSpecies(profile("red_shrimp"), slopeObs(bottomSalinityPsu = 36.0))
+        assertEquals(PfzStatus.UNAVAILABLE, tooFresh.status)
+    }
+
+    @Test
+    fun `red shrimp requires the slope measurements its envelope is written from`() {
+        for (dropped in listOf(
+            slopeObs(depthM = 300.0, bottomTempC = null),
+            slopeObs(bottomSalinityPsu = null)
+        )) {
+            val result = PfzEngine.evaluateSpecies(profile("red_shrimp"), dropped)
+            assertEquals(PfzStatus.INSUFFICIENT_DATA, result.status)
+            assertTrue(result.blockers.any { it.contains("required") }, "got ${result.blockers}")
+        }
+    }
+
+    // ----------------------------------------------------- regional SST overrides
+
+    @Test
+    fun `a regional band is resolved from the observation and changes the verdict`() {
+        // The eastern Aegean band is both cooler (12-24 C) and shallower
+        // (10-110 m) than the basin-wide one, so the same cell answers
+        // differently in the two basins. That is the mechanism working, not a
+        // duplicated global number with extra words attached.
+        val sardine = profile("sardine")
+        val cell = goodObs(sst = 25.0, chl = 0.9)
+
+        val central = PfzEngine.evaluateSpecies(sardine, cell, region = PfzRegions.CENTRAL)
+        val eastern = PfzEngine.evaluateSpecies(sardine, cell, region = PfzRegions.EASTERN)
+
+        assertEquals(PfzStatus.SCOREABLE, central.status, "25C is inside the basin-wide 10-28C gate")
+        assertEquals(
+            PfzStatus.UNAVAILABLE,
+            eastern.status,
+            "25C is above the cited Aegean 24C gate"
+        )
+        assertTrue(eastern.blockers.any { it.startsWith("sst:") }, "got ${eastern.blockers}")
+    }
+
+    @Test
+    fun `sardine is gated by its cited western band at the basin-wide optimum`() {
+        // Tugores et al. 2011 Spanish autumn: 14-18.5 C. The basin-wide band is
+        // 10-28 C, so a 25 C cell scores well basin-wide and is refused in the
+        // west. That inversion is the whole reason the override exists.
+        val p = profile("sardine")
+        assertTrue(
+            p.byRegion.getValue(PfzRegions.WESTERN).sstC!!.gateMax <
+                p.sstC!!.gateMax,
+            "the western override must actually be narrower than the basin-wide gate"
+        )
+
+        val tooWarm = PfzEngine.evaluateSpecies(
+            p,
+            goodObs(spotId = "spain-medes", sst = 25.0).copy(region = "spain")
+        )
+        assertEquals(PfzStatus.UNAVAILABLE, tooWarm.status)
+
+        val inBand = PfzEngine.evaluateSpecies(
+            p,
+            goodObs(spotId = "spain-medes", sst = 17.0).copy(region = "spain")
+        )
+        assertEquals(PfzStatus.SCOREABLE, inBand.status)
+        assertEquals(
+            100,
+            inBand.factors.first { it.factor == PfzFactor.SST }.score,
+            "17C is the middle of the cited 16-18 C ideal"
+        )
+    }
+
+    @Test
+    fun `an uncited regional band is disclosed rather than invented`() {
+        // There is no Maghreb override for sardine. The literature behind this
+        // profile does not resolve one, so the gap has to be visible to the
+        // caller instead of quietly falling back to basin-wide bands as if they
+        // were cited for that water.
+        val sardine = profile("sardine")
+        assertFalse(
+            sardine.byRegion.containsKey(PfzRegions.MAGHREB),
+            "no Maghreb band is cited, so none may be declared"
+        )
+        assertTrue(
+            sardine.note!!.contains("NO maghreb override"),
+            "the missing Maghreb band must be disclosed in the note, got ${sardine.note}"
+        )
+        // The disclosure has to survive all the way to the caller, or naming the
+        // gap here accomplishes nothing.
+        val result = PfzEngine.evaluateSpecies(
+            sardine,
+            goodObs(spotId = "algeria-tipaza", sst = 20.0).copy(region = "algeria")
+        )
+        assertEquals(PfzStatus.SCOREABLE, result.status)
+        assertEquals(PfzRegions.MAGHREB, result.region, "the band actually applied must be named")
+        assertTrue(
+            result.note!!.contains("maghreb", ignoreCase = true),
+            "the caller must see that the Algerian score used an uncited band: ${result.note}"
+        )
+    }
+
+    @Test
+    fun `every regional override names a known region`() {
+        for (p in PfzSpeciesRegistry.all()) {
+            for (region in p.sstCByRegion.keys) {
+                assertTrue(
+                    region in PfzRegions.ALL,
+                    "${p.id} sstCByRegion declares unknown region '$region'"
+                )
+            }
+            for ((region, override) in p.byRegion) {
+                assertTrue(
+                    region in PfzRegions.ALL,
+                    "${p.id} byRegion declares unknown region '$region'"
+                )
+                // An exclusion and a band for the same region cannot both be
+                // declared: one says the species is absent, the other that it is
+                // present, and the engine would silently prefer the band.
+                assertTrue(
+                    !(override.unavailable != null && override.sstC != null),
+                    "${p.id} byRegion.$region is both declared absent and given an sstC band"
+                )
+            }
+        }
     }
 }

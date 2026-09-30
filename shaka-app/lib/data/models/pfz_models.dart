@@ -130,6 +130,23 @@ class PfzSpeciesResult {
   /// bottom substrate for octopus). The score is blind to these.
   final List<String> unscorableRequirements;
 
+  /// The model that produced this number.
+  ///
+  /// Bluefin feeding and spawning are near-inverted, so a score without the mode
+  /// that generated it is not reproducible — and the caller has to be able to
+  /// show which one they are looking at.
+  final String? mode;
+
+  /// Size class the applied mode was parameterised for, when it is split.
+  final String? sizeClass;
+
+  /// Macro-basin used for geographic overrides, when one was resolved.
+  final String? region;
+
+  /// Species-level caveat that must be shown next to the number, such as
+  /// "no Maghreb band is cited, so the basin-wide band is being applied here".
+  final String? note;
+
   const PfzSpeciesResult({
     required this.id,
     required this.commonName,
@@ -144,6 +161,10 @@ class PfzSpeciesResult {
     this.missingFactors = const [],
     this.lowConfidenceFactors = const [],
     this.unscorableRequirements = const [],
+    this.mode,
+    this.sizeClass,
+    this.region,
+    this.note,
   });
 
   factory PfzSpeciesResult.fromJson(Map<String, dynamic> json) {
@@ -167,6 +188,10 @@ class PfzSpeciesResult {
       missingFactors: strings('missingFactors'),
       lowConfidenceFactors: strings('lowConfidenceFactors'),
       unscorableRequirements: strings('unscorableRequirements'),
+      mode: json['mode'] as String?,
+      sizeClass: json['sizeClass'] as String?,
+      region: json['region'] as String?,
+      note: json['note'] as String?,
     );
   }
 
@@ -277,6 +302,18 @@ class PfzZone {
   final double? chlaGradientMgM3km;
   final double? sstAnomalyC;
   final double? depthM;
+
+  /// The model that produced this zone's number: the behavioural mode, the size
+  /// class, and the macro-basin the zone resolved to.
+  ///
+  /// The same corridor can be run for two modes of one species and the scores
+  /// differ, so a zone card without this cannot be reproduced. The region also
+  /// decides whether the score exists at all — a red shrimp zone in the western
+  /// basin is refused, not ranked low.
+  final String? mode;
+  final String? sizeClass;
+  final String? region;
+
   final List<String> drivers;
   final List<String> blockers;
   final List<String> missingFactors;
@@ -298,6 +335,9 @@ class PfzZone {
     this.chlaGradientMgM3km,
     this.sstAnomalyC,
     this.depthM,
+    this.mode,
+    this.sizeClass,
+    this.region,
     this.drivers = const [],
     this.blockers = const [],
     this.missingFactors = const [],
@@ -330,6 +370,9 @@ class PfzZone {
       chlaGradientMgM3km: (json['chlaGradientMgM3km'] as num?)?.toDouble(),
       sstAnomalyC: (json['sstAnomalyC'] as num?)?.toDouble(),
       depthM: (json['depthM'] as num?)?.toDouble(),
+      mode: json['mode'] as String?,
+      sizeClass: json['sizeClass'] as String?,
+      region: json['region'] as String?,
       drivers: strings('drivers'),
       blockers: strings('blockers'),
       missingFactors: strings('missingFactors'),

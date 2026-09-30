@@ -480,16 +480,40 @@ fun Application.configureRouting() {
              * `blockers` and `coverageNotes` rather than showing 0.
              *
              * Reads SpotDataCache and, when a grid corridor is configured,
-             * enriches the observation with the Copernicus Med SST/SSTA/CHL
-             * front analysis. Upstream failures are time-bounded and breakered,
-             * and surface as named missing factors — never as invented fronts.
+             * enriches the observation with the Copernicus Med analysis: the
+             * SST/SSTA/CHL front corridor plus bottom temperature, bottom
+             * salinity, bottom current, mixed layer depth, the derived SSH
+             * anomaly and dSST30. Upstream failures are time-bounded and
+             * breakered, and surface as named missing factors - never as
+             * invented fronts.
+             *
+             * Query parameters:
+             *  - `mode` - behavioural mode, e.g. `feeding` or `spawning`. Applies
+             *    only to species that declare modes; anything else is ignored and
+             *    the default mode is used. Bluefin feeding and spawning are
+             *    different models against near-inverted chlorophyll
+             *    requirements, so the applied mode is echoed back per species.
+             *  - `sizeClass` - e.g. `large`. A size class the applied mode was
+             *    not parameterised for is refused with `insufficient_data`
+             *    rather than answered with another class's numbers.
+             *
+             * A species that declares a `requiredFactor` which did not resolve
+             * returns `insufficient_data` with a null `pfz` and a blocker
+             * naming the factor. That is not a degradation: Colloca et al. (2014)
+             * fit hake habitat as a product in which any zero term zeroes the
+             * cell, so a score without bottom temperature is a different model,
+             * not a weaker one.
              */
             get("/spots/{id}/pfz") {
                 val spotId = call.parameters["id"]
                     ?: return@get call.respond(HttpStatusCode.BadRequest, mapOf("error" to "id required"))
                 val date = call.parameters["date"] ?: java.time.LocalDate.now().toString()
 
-                when (val result = pfzService.evaluateWithGrid(spotId, date)) {
+                when (val result = pfzService.evaluateWithGrid(
+                    spotId, date,
+                    mode = call.request.queryParameters["mode"],
+                    sizeClass = call.request.queryParameters["sizeClass"]
+                )) {
                     is PfzService.Result.Ok -> call.respond(result.response)
                     is PfzService.Result.UnknownSpot ->
                         call.respond(HttpStatusCode.NotFound, mapOf("error" to "Spot not found"))
@@ -524,7 +548,11 @@ fun Application.configureRouting() {
                 val species = call.request.queryParameters["species"]
                     ?: return@get call.respond(HttpStatusCode.BadRequest, mapOf("error" to "species required"))
 
-                when (val result = pfzService.evaluateZones(lat, lon, date, species)) {
+                when (val result = pfzService.evaluateZones(
+                    lat, lon, date, species,
+                    mode = call.request.queryParameters["mode"],
+                    sizeClass = call.request.queryParameters["sizeClass"]
+                )) {
                     is PfzService.ZonesResult.Ok -> call.respond(result.response)
                     is PfzService.ZonesResult.UnknownSpecies -> call.respond(
                         HttpStatusCode.NotFound,

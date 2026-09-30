@@ -38,12 +38,26 @@ class PfzGridService(
 ) {
     suspend fun analyze(lat: Double, lon: Double, date: LocalDate): PfzSpatialGrid =
         withTimeoutOrNull(ANALYZE_TIMEOUT_MS) {
-            val (sstGrid, sstaGrid, chlGrid) = coroutineScope {
-                val sst = async { source.fetchGrid(CopernicusField.SST, lat, lon, date) }
-                val ssta = async { source.fetchGrid(CopernicusField.SSTA, lat, lon, date) }
-                val chl = async { source.fetchGrid(CopernicusField.CHL, lat, lon, date) }
-                Triple(sst.await(), ssta.await(), chl.await())
+            // One batched call for the surface corridor, one for the benthic and
+            // mesoscale fields. Batching matters: `uo` and `vo` are two variables
+            // in one subset request, and the two datasets behind them are two
+            // subprocess runs, not four.
+            val surface = coroutineScope {
+                val corridor = async {
+                    source.fetchGrids(FRONT_FIELDS, lat, lon, date)
+                }
+                val benthic = async {
+                    source.fetchGrids(BENTHIC_FIELDS, lat, lon, date)
+                }
+                val sshMonthly = async {
+                    source.fetchGrids(listOf(CopernicusField.SSH_MONTHLY), lat, lon, date)
+                }
+                Triple(corridor.await(), benthic.await(), sshMonthly.await())
             }
+            val (frontGrids, benthicGrids, monthlyGrids) = surface
+            val sstGrid = frontGrids[CopernicusField.SST]
+            val sstaGrid = frontGrids[CopernicusField.SSTA]
+            val chlGrid = frontGrids[CopernicusField.CHL]
 
             val offsets = listOf(
                 0.0 to 0.0,
@@ -84,6 +98,11 @@ class PfzGridService(
                 else -> null
             }
 
+            // dSST30 needs a second SST analysis a month back. Two real model
+            // fields differenced by us; null if either is absent, and never a
+            // filled-in value, because "no trend" and "no warming" are different.
+            val sstWarming = sstWarmingC(sstGrid, lat, lon, date)
+
             PfzSpatialGrid(
                 sstGradientCkm = sstGradient,
                 chlaGradientMgM3km = chlGradient,
@@ -91,7 +110,15 @@ class PfzGridService(
                 depthGradientMperKm = depthGradientMperKm(probes),
                 frontKm = frontKm,
                 frontCoincidence = coincidence,
-                dataDate = sstGrid?.dataDate ?: sstaGrid?.dataDate ?: chlGrid?.dataDate
+                dataDate = sstGrid?.dataDate ?: sstaGrid?.dataDate ?: chlGrid?.dataDate,
+                bottomTempC = benthicGrids[CopernicusField.BOTTOM_TEMP]
+                    ?.let { nearestCellValue(it, lat, lon) },
+                bottomSalinityPsu = benthicGrids[CopernicusField.BOTTOM_SALINITY]
+                    ?.let { nearestCellValue(it, lat, lon) },
+                bottomCurrentMs = bottomCurrentMs(benthicGrids, lat, lon),
+                mldM = benthicGrids[CopernicusField.MLD]?.let { nearestCellValue(it, lat, lon) },
+                sshAnomalyM = sshAnomalyM(benthicGrids, monthlyGrids, lat, lon),
+                sstWarmingC = sstWarming
             )
         } ?: PfzSpatialGrid.missing()
 
@@ -118,12 +145,18 @@ class PfzGridService(
      */
     suspend fun analyzeZones(lat: Double, lon: Double, requested: LocalDate): List<PfzZoneDatum> =
         withTimeoutOrNull(ANALYZE_TIMEOUT_MS) {
-            val (sstGrid, sstaGrid, chlGrid) = coroutineScope {
-                val sst = async { source.fetchGrid(CopernicusField.SST, lat, lon, requested) }
-                val ssta = async { source.fetchGrid(CopernicusField.SSTA, lat, lon, requested) }
-                val chl = async { source.fetchGrid(CopernicusField.CHL, lat, lon, requested) }
-                Triple(sst.await(), ssta.await(), chl.await())
+            val (frontGrids, benthicGrids, monthlyGrids) = coroutineScope {
+                // Same three batches as the spot corridor: front fields, benthic
+                // plus daily SSH, and the monthly mean the anomaly is differenced
+                // against. One request per dataset, not one per factor.
+                val front = async { source.fetchGrids(FRONT_FIELDS, lat, lon, requested) }
+                val benthic = async { source.fetchGrids(BENTHIC_FIELDS, lat, lon, requested) }
+                val monthly = async { source.fetchGrids(listOf(CopernicusField.SSH_MONTHLY), lat, lon, requested) }
+                Triple(front.await(), benthic.await(), monthly.await())
             }
+            val sstGrid = frontGrids[CopernicusField.SST]
+            val sstaGrid = frontGrids[CopernicusField.SSTA]
+            val chlGrid = frontGrids[CopernicusField.CHL]
 
             val anchor = sstGrid ?: chlGrid ?: sstaGrid ?: return@withTimeoutOrNull emptyList()
             val sstEdges = sstGrid?.let { edgeGradients(it) }
@@ -176,7 +209,8 @@ class PfzGridService(
                     val (outer, holes) = polygonOf(patch.cells, anchor.lats, anchor.lons)
                     zoneDatum(
                         representative.lat, representative.lon,
-                        sstEdges, chlEdges, sstaGrid, analyzed, forecastDay
+                        sstGrid, sstEdges, chlEdges, chlGrid, sstaGrid, benthicGrids, monthlyGrids,
+                        requested, analyzed, forecastDay
                     ).copy(
                         lat = centroidLat,
                         lon = centroidLon,
@@ -448,13 +482,25 @@ class PfzGridService(
         }!!
     }
 
-    /** Corridor fields for one zone centre. */
+    /**
+     * Corridor fields for one zone centre.
+     *
+     * [benthic] and [monthly] carry the same products the spot corridor uses, so
+     * a species with a required benthic or mesoscale factor (hake, red shrimp,
+     * bluefin) scores against real measurements offshore too, instead of being
+     * refused for lack of a factor that was simply never fetched here.
+     */
     private suspend fun zoneDatum(
         lat: Double,
         lon: Double,
+        sstGrid: CopernicusGrid?,
         sstEdges: List<EdgeGradient>?,
         chlEdges: List<EdgeGradient>?,
+        chlGrid: CopernicusGrid?,
         sstaGrid: CopernicusGrid?,
+        benthic: Map<CopernicusField, CopernicusGrid>,
+        monthly: Map<CopernicusField, CopernicusGrid>,
+        date: LocalDate,
         dataDate: LocalDate?,
         forecastDay: Int
     ): PfzZoneDatum {
@@ -483,6 +529,19 @@ class PfzGridService(
             sstGradientCkm = sstGradient,
             chlaGradientMgM3km = chlGradient,
             sstAnomalyC = sstaGrid?.let { nearestCellValue(it, lat, lon) },
+            waterTempC = sstGrid?.let { nearestCellValue(it, lat, lon) },
+            // The CHL grid is already loaded for its gradient, so the concentration
+            // at the zone centre costs nothing extra. Bluefin spawning requires
+            // it, so leaving it out would refuse that mode offshore while the
+            // measurement sat unused in memory.
+            chlorophyllMgM3 = chlGrid?.let { nearestCellValue(it, lat, lon) },
+            bottomTempC = benthic[CopernicusField.BOTTOM_TEMP]?.let { nearestCellValue(it, lat, lon) },
+            bottomSalinityPsu = benthic[CopernicusField.BOTTOM_SALINITY]
+                ?.let { nearestCellValue(it, lat, lon) },
+            bottomCurrentMs = bottomCurrentMs(benthic, lat, lon),
+            mldM = benthic[CopernicusField.MLD]?.let { nearestCellValue(it, lat, lon) },
+            sshAnomalyM = sshAnomalyM(benthic, monthly, lat, lon),
+            sstWarmingC = sstWarmingC(sstGrid, lat, lon, date),
             depthM = source.depthM(lat, lon),
             depthGradientMperKm = null,
             frontKm = frontKm,
@@ -490,6 +549,32 @@ class PfzGridService(
             dataDate = dataDate,
             forecastDay = forecastDay
         )
+    }
+
+    /**
+     * DERIVED dSST30: [sstGrid] minus SST [SST_TREND_DAYS] days earlier at the
+     * same cell, both real model fields differenced here.
+     *
+     * Null whenever either leg is absent, and never defaulted to 0.0: "the grid
+     * did not resolve" and "the sea did not warm" are different answers, and
+     * bluefin spawning makes this factor REQUIRED precisely because it is the
+     * cue the stock responds to.
+     */
+    private suspend fun sstWarmingC(
+        sstGrid: CopernicusGrid?,
+        lat: Double,
+        lon: Double,
+        date: LocalDate
+    ): Double? {
+        if (sstGrid == null) return null
+        val then = withTimeoutOrNull(TREND_TIMEOUT_MS) {
+            source.fetchGrids(
+                listOf(CopernicusField.SST), lat, lon, date.minusDays(SST_TREND_DAYS)
+            )
+        }?.get(CopernicusField.SST) ?: return null
+        val now = nearestCellValue(sstGrid, lat, lon) ?: return null
+        val before = nearestCellValue(then, lat, lon) ?: return null
+        return now - before
     }
 
     /** Strongest gradient at the edge cell closest to (lat, lon). */
@@ -549,8 +634,53 @@ class PfzGridService(
                 }
             }
         }
+        if (bestI < 0 || bestJ < 0) return null
         val v = grid.values[bestI][bestJ]
         return if (v.isNaN()) null else v
+    }
+
+    /**
+     * Bottom current speed, m/s, as the magnitude of the `uo`/`vo` pair at the
+     * same cell.
+     *
+     * Both components must resolve at the cell. Taking the magnitude of a
+     * resolved zonal component against a masked meridional one would report a
+     * spurious weak current, and a demersal profile that gates on this would
+     * then pass on half a measurement.
+     */
+    private fun bottomCurrentMs(
+        grids: Map<CopernicusField, CopernicusGrid>,
+        lat: Double,
+        lon: Double
+    ): Double? {
+        val u = grids[CopernicusField.CURRENT_U]?.let { nearestCellValue(it, lat, lon) } ?: return null
+        val v = grids[CopernicusField.CURRENT_V]?.let { nearestCellValue(it, lat, lon) } ?: return null
+        return sqrt(u * u + v * v)
+    }
+
+    /**
+     * Sea surface height anomaly, DERIVED as daily `zos` minus the monthly-mean
+     * `zos` of the same product.
+     *
+     * Derived rather than read, because this product's static dataset publishes
+     * no mean dynamic topography (`mdt`) - verified with `copernicusmarine
+     * describe`, which lists only `deptho`, `deptho_lev` and `mask`. The two
+     * fields are both real model output and the differencing is ours, so the
+     * factor is marked derived tier in the profiles.
+     *
+     * Both cells must resolve. One sided, this would be the raw daily sea level,
+     * whose units are metres of geoid height and whose mean is not zero.
+     */
+    private fun sshAnomalyM(
+        daily: Map<CopernicusField, CopernicusGrid>,
+        monthly: Map<CopernicusField, CopernicusGrid>,
+        lat: Double,
+        lon: Double
+    ): Double? {
+        val today = daily[CopernicusField.SSH]?.let { nearestCellValue(it, lat, lon) } ?: return null
+        val climatology = monthly[CopernicusField.SSH_MONTHLY]
+            ?.let { nearestCellValue(it, lat, lon) } ?: return null
+        return today - climatology
     }
 
     private fun depthGradientMperKm(probes: List<DepthProbe>): Double? {
@@ -591,6 +721,39 @@ class PfzGridService(
         private const val KM_PER_DEG_LON = 111.320
         private const val ANALYZE_TIMEOUT_MS = 120_000L
 
+        /** Days between the two SST analyses differenced into dSST30. */
+        private const val SST_TREND_DAYS = 30L
+
+        /**
+         * The trend fetch is the least important thing in the corridor, so it
+         * gets its own shorter budget: a hung 30-day-old request must not
+         * discard an otherwise complete analysis.
+         */
+        private const val TREND_TIMEOUT_MS = 30_000L
+
+        /** The surface corridor, all from the same L4 daily products. */
+        val FRONT_FIELDS = listOf(
+            CopernicusField.SST, CopernicusField.SSTA, CopernicusField.CHL
+        )
+
+        /**
+         * The benthic and mesoscale fields, all from the same L4 physics product,
+         * so they share one subset request instead of one each.
+         *
+         * SSH belongs here, not in [FRONT_FIELDS]: the anomaly is differenced
+         * against [SSH_MONTHLY], and the daily term is read out of this same
+         * batch. Omitting it leaves every SSHa null, which makes bluefin feeding
+         * permanently `insufficient_data` because it requires `ssh_anomaly`.
+         */
+        val BENTHIC_FIELDS = listOf(
+            CopernicusField.BOTTOM_TEMP,
+            CopernicusField.BOTTOM_SALINITY,
+            CopernicusField.CURRENT_U,
+            CopernicusField.CURRENT_V,
+            CopernicusField.MLD,
+            CopernicusField.SSH
+        )
+
         /** SST anomaly magnitude (C) that counts as a warm/cool core. */
         private const val ANOMALY_CORE_C = 0.5
 
@@ -625,6 +788,23 @@ data class PfzZoneDatum(
     val frontCoincidence: FrontCoincidence?,
     val dataDate: LocalDate?,
     val forecastDay: Int,
+
+    // ---- benthic and mesoscale factors, sampled at the patch's representative
+    // cell exactly as for a spot. A zone is scored by the same model, so it needs
+    // the same real measurements: without these a hake or red shrimp zone could
+    // only ever be refused, and a bluefin zone could never clear its required
+    // `ssh_anomaly`.
+    val waterTempC: Double? = null,
+    val chlorophyllMgM3: Double? = null,
+    val bottomTempC: Double? = null,
+    val bottomSalinityPsu: Double? = null,
+    val bottomCurrentMs: Double? = null,
+    val mldM: Double? = null,
+    /** DERIVED: daily SSH minus the monthly mean of the same product. */
+    val sshAnomalyM: Double? = null,
+    /** DERIVED: current SST minus SST 30 days earlier. */
+    val sstWarmingC: Double? = null,
+
     /** Outer ring of the patch. Closed (first point == last point). */
     val polygon: List<PfzPoint> = emptyList(),
     /** Interior rings of [polygon] (holes). */
@@ -642,7 +822,46 @@ data class PfzSpatialGrid(
     val depthGradientMperKm: Double?,
     val frontKm: Double?,
     val frontCoincidence: FrontCoincidence?,
-    val dataDate: LocalDate?
+    val dataDate: LocalDate?,
+
+    // ---- benthic and mesoscale fields, all real Copernicus physics products.
+    // Null means the grid did not resolve, and the engine reports the factor as
+    // missing. For a species that declares one of these REQUIRED that is
+    // insufficient_data, not a smaller number.
+
+    /** Copernicus `bottomT`, °C. Colloca et al.'s SBT, the hake profile's main term. */
+    val bottomTempC: Double? = null,
+
+    /** Copernicus `so` at the deepest non-masked level, psu. */
+    val bottomSalinityPsu: Double? = null,
+
+    /**
+     * Bottom current SPEED, m/s, from the vector magnitude of `uo` and `vo` at
+     * the deepest non-masked level.
+     *
+     * m/s and not km/h because Colloca et al. (2014) fit hake recruitment to a
+     * 0.034 m/s ceiling; 0.034 m/s is 0.12 km/h, and mixing the units would
+     * invert every cell in the profile.
+     */
+    val bottomCurrentMs: Double? = null,
+
+    /** Copernicus `mlotst`, m. */
+    val mldM: Double? = null,
+
+    /**
+     * DERIVED, not published: daily `zos` minus the monthly-mean `zos` of the
+     * same product, because that product's static dataset carries no `mdt`.
+     *
+     * Measured live: 18 mm of spread across a 9 km box against 276 mm across a
+     * 5x8 degree box, so this is a regional gate rather than a local signal.
+     */
+    val sshAnomalyM: Double? = null,
+
+    /**
+     * DERIVED 30-day SST change in °C (Druon et al.'s dSST30), differencing the
+     * current SST analysis against the one 30 days earlier.
+     */
+    val sstWarmingC: Double? = null
 ) {
     companion object {
         fun missing(): PfzSpatialGrid =
@@ -664,6 +883,32 @@ interface PfzGridSource {
         date: LocalDate
     ): CopernicusGrid?
 
+    /**
+     * Several fields at one point, grouped by dataset so each `copernicusmarine
+     * subset` call carries all the variables its dataset can serve.
+     *
+     * The default is a plain loop over [fetchGrid]. [CopernicusGridSource]
+     * overrides it with the client's real batching, because a subset call takes
+     * repeated `--variable` flags: `uo` and `vo` are one subprocess there and two
+     * here, and the difference is 9-20 s of network and Python startup each.
+     *
+     * A field that cannot be fetched is simply absent from the result. Nothing
+     * is substituted and nothing is ordered, so callers must treat a missing key
+     * as "unknown".
+     */
+    suspend fun fetchGrids(
+        fields: List<CopernicusField>,
+        lat: Double,
+        lon: Double,
+        date: LocalDate
+    ): Map<CopernicusField, CopernicusGrid> {
+        val out = LinkedHashMap<CopernicusField, CopernicusGrid>(fields.size)
+        for (field in fields) {
+            fetchGrid(field, lat, lon, date)?.let { out[field] = it }
+        }
+        return out
+    }
+
     /** Single-point bathymetric depth at (lat, lon), or null. */
     suspend fun depthM(lat: Double, lon: Double): Double?
 }
@@ -682,6 +927,19 @@ class CopernicusGridSource(
         lon: Double,
         date: LocalDate
     ): CopernicusGrid? = grid.fetchGrid(field, lat, lon, date = date)
+
+    /**
+     * Real batching. [CopernicusGridClient.fetchGrids] groups the requested
+     * fields by dataset and issues one subset call per dataset, so the benthic
+     * corridor is three subprocess runs rather than five.
+     */
+    override suspend fun fetchGrids(
+        fields: List<CopernicusField>,
+        lat: Double,
+        lon: Double,
+        date: LocalDate
+    ): Map<CopernicusField, CopernicusGrid> =
+        grid.fetchGrids(fields, lat, lon, date = date)
 
     override suspend fun depthM(lat: Double, lon: Double): Double? =
         bathymetry.fetchDepthOnly(lat, lon)?.depthM

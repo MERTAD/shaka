@@ -7,93 +7,580 @@
       "commonName": "Atlantic Bluefin Tuna",
       "targetTag": "BluefinTuna",
       "scientificName": "Thunnus thynnus",
-      "aliases": ["bluefin", "albacora", "atun", "thon"],
+      "aliases": [
+        "bluefin",
+        "albacora",
+        "atun",
+        "thon"
+      ],
       "guild": "large_pelagic",
-      "depth": { "gateMinM": 0, "gateMaxM": 200, "prefMinM": 0, "prefMaxM": 50, "scope": "water_column", "conf": "cited", "src": "Druon2016: 79+/-8% of time in the first 50m of the water column; bathymetry does not constrain a surface-dwelling tuna - it hunts across basins with >2000m bottom depth" },
-      "sstC": { "gateMin": 7.5, "gateMax": 24.0, "idealMin": 15.0, "idealMax": 22.0, "conf": "cited", "src": "Druon2016 Table 3: large ABFT feeding min 7.5C / max 24.0C" },
-      "chlMgM3": { "gateMin": 0.02, "gateMax": 20.0, "idealMin": 0.2, "idealMax": 1.5, "preference": "band", "conf": "expert", "src": "Druon2011 reports higher chl-a preferred for feeding habitat but gives no numeric band; band is an expert estimate" },
+      "depth": {
+        "gateMinM": 0,
+        "gateMaxM": 200,
+        "prefMinM": 0,
+        "prefMaxM": 50,
+        "scope": "water_column",
+        "conf": "cited",
+        "src": "Druon2016: 79+/-8% of time in the first 50m of the water column; bathymetry does not constrain a surface-dwelling tuna - it hunts across basins with >2000m bottom depth"
+      },
+      "sstC": {
+        "gateMin": 7.5,
+        "gateMax": 24.0,
+        "idealMin": 15.0,
+        "idealMax": 22.0,
+        "conf": "cited",
+        "src": "Druon2016 Table 3: large ABFT feeding min 7.5C / max 24.0C"
+      },
+      "chlMgM3": {
+        "gateMin": 0.02,
+        "gateMax": 20.0,
+        "idealMin": 0.2,
+        "idealMax": 1.5,
+        "preference": "band",
+        "conf": "expert",
+        "src": "Druon2011 reports higher chl-a preferred for feeding habitat but gives no numeric band; band is an expert estimate"
+      },
       "windKmhMax": 25,
       "swellMMax": 1.5,
-      "season": { "peakMonths": [5, 6, 7, 8, 9], "closedMonths": [], "conf": "cited", "src": "ICCAT GBYP: Med feeding/western basin May-Sep; Druon2016 spawning favourable mid-May (E) to mid-Jul (W)" },
-      "weights": { "sst": 0.20, "chla_gradient": 0.15, "chl": 0.05, "depth": 0.10, "wind": 0.10, "swell": 0.05, "solunar": 0.05, "season": 0.05, "sst_gradient": 0.15, "sst_anomaly": 0.10 },
-      "note": "Weight is assigned to the documented drivers: chla_gradient and the SST front/sst anomaly corridor (Druon2011 feeding habitat is driven by the chlorophyll-a *front*, and thermal fronts are its travelling companion). These spatial factors are scored from real Copernicus Med L4 grids when they resolve, and reported missing when they do not, which correctly lowers bluefin's confidence on data gaps. The chl concentration band carries only 0.05 as an EXPERT-tier stand-in. SST/depth/season bands are cited; chl, chla_gradient, sst_gradient and sst_anomaly are not."
+      "season": {
+        "peakMonths": [
+          5,
+          6,
+          7,
+          8,
+          9
+        ],
+        "closedMonths": [],
+        "conf": "cited",
+        "src": "ICCAT GBYP: Med feeding/western basin May-Sep; Druon2016 spawning favourable mid-May (E) to mid-Jul (W)"
+      },
+      "weights": {
+        "sst": 0.2,
+        "chla_gradient": 0.3,
+        "ssh_anomaly": 0.2,
+        "sst_gradient": 0.15,
+        "chl": 0.05,
+        "season": 0.1
+      },
+      "note": "Druon et al. (2016) fit SEPARATE parameterisations for feeding and spawning and the two barely overlap: feeding wants CHL > 0.1 mg/m3 with a high gradCHL, spawning wants CHL < 0.15 mg/m3 with a low one. A single band set cannot hold both, which is why this species carries modes and why the applied mode is disclosed in every response. gradCHL and SSHa are REQUIRED for feeding: without them the model collapses into the SST-only lookup the paper argues against. dSST30 and SSHa are derived by Shaka (30-day SST series; daily zos minus the monthly mean zos), not published, and are marked as such.",
+      "modes": [
+        {
+          "id": "feeding",
+          "label": "Feeding, large fish >25 kg",
+          "isDefault": true,
+          "sizeClasses": [
+            "large"
+          ],
+          "defaultSizeClass": "large",
+          "sstC": {
+            "gateMin": 7.5,
+            "gateMax": 24.0,
+            "idealMin": 15.0,
+            "idealMax": 22.0,
+            "conf": "cited",
+            "src": "Druon et al. 2016 s3: large ABFT feeding cluster min 7.5C / max 24.0C. The 24.0C maximum is interpolated between the Gulf of Mexico winter 85th percentile (23.83C, n=141) and the Mediterranean summer-autumn 85th percentile (24.37C, n=149)"
+          },
+          "chlMgM3": {
+            "gateMin": 0.02,
+            "gateMax": 20.0,
+            "idealMin": 0.2,
+            "idealMax": 1.5,
+            "conf": "expert",
+            "src": "Druon et al. 2016 s3: feeding clusters have CHL > 0.1 mg/m3, but the paper gives no band, so this EXPERT envelope is a stand-in and carries only 0.05 weight. The documented driver is gradCHL, which is a separate required factor"
+          },
+          "sshAnomalyM": {
+            "gateMin": -0.1,
+            "gateMax": 0.0,
+            "preference": "higher_better",
+            "conf": "cited",
+            "src": "Druon et al. 2016 s3: feeding clusters at SSHa >= -0.10 m (98.75th / 99.5th / 97th percentiles for small / large / undifferentiated fish). Declared higher_better over -0.10..0.0 so the score saturates at the cited threshold: the paper gives a threshold and not a gradient, and inventing a decline above it would fabricate a response curve"
+          },
+          "season": {
+            "peakMonths": [
+              5,
+              6,
+              7,
+              8,
+              9
+            ],
+            "closedMonths": [],
+            "conf": "cited",
+            "src": "ICCAT GBYP: western Mediterranean feeding season May-September. These are peak months, not a closed gate - bluefin feed year-round and the season only grades how good it is"
+          },
+          "weights": {
+            "sst": 0.2,
+            "chla_gradient": 0.3,
+            "ssh_anomaly": 0.2,
+            "sst_gradient": 0.15,
+            "chl": 0.05,
+            "season": 0.1
+          },
+          "requiredFactors": [
+            "sst",
+            "chla_gradient",
+            "ssh_anomaly"
+          ],
+          "conf": "cited",
+          "src": "Druon et al. 2016 s3, feeding-cluster analysis"
+        },
+        {
+          "id": "spawning",
+          "label": "Spawning, large fish >25 kg",
+          "sizeClasses": [
+            "large"
+          ],
+          "defaultSizeClass": "large",
+          "sstC": {
+            "gateMin": 15.0,
+            "gateMax": 26.0,
+            "idealMin": 18.0,
+            "idealMax": 24.0,
+            "conf": "expert",
+            "src": "Druon et al. 2016 s1 describes spawning in \"warm, mostly oligotrophic surface waters\" and gives NO numeric spawning envelope. This band is an EXPERT reading of \"warm\", not a cited limit: the upper part of the feeding range, widened, because the paper does not constrain it"
+          },
+          "chlMgM3": {
+            "gateMin": 0.0,
+            "gateMax": 0.15,
+            "preference": "lower_better",
+            "conf": "cited",
+            "src": "Druon et al. 2016 s3: spawning clusters have CHL < 0.15 mg/m3 and low gradCHL. This is the inverse of the feeding requirement, which is the clearest single demonstration that one band per species cannot represent both behaviours"
+          },
+          "sshAnomalyM": {
+            "gateMin": -0.1,
+            "gateMax": 0.0,
+            "preference": "higher_better",
+            "conf": "expert",
+            "src": "Druon et al. 2016 gives a -0.10 m SSHa threshold for FEEDING clusters and no spawning-specific value. The feeding threshold is reused so the driver stays separated from SST, and is marked EXPERT because this is an extension of the fit, not part of it"
+          },
+          "sstWarmingC": {
+            "gateMin": 0.0,
+            "gateMax": 2.5,
+            "preference": "higher_better",
+            "conf": "expert",
+            "src": "Druon et al. 2016 s1-2: monthly SST increase (dSST30) simulates the spring stratification build-up that spawning is associated with, stated qualitatively as \"high\" with no number. The 0C floor is defensible because cooling is not the documented condition; the 2.5C top is this app's assumption about Mediterranean spring warming. The factor is derived from a 30-day SST series, not observed"
+          },
+          "season": {
+            "peakMonths": [
+              5,
+              6,
+              7
+            ],
+            "closedMonths": [],
+            "conf": "cited",
+            "src": "Druon et al. 2016 abstract: spawning from mid-May in the eastern basin, to mid-July in the western with a June peak. Not a closed gate - spawning runs through the season"
+          },
+          "weights": {
+            "sst": 0.2,
+            "chl": 0.25,
+            "sst_warming": 0.2,
+            "ssh_anomaly": 0.2,
+            "season": 0.15
+          },
+          "requiredFactors": [
+            "sst",
+            "chl",
+            "sst_warming",
+            "ssh_anomaly"
+          ],
+          "conf": "cited",
+          "src": "Druon et al. 2016 abstract and s3, spawning-cluster analysis"
+        }
+      ],
+      "unscorableRequirements": [
+        "Small-fish (<=25 kg) thermal envelope: Druon et al. 2016 s3 fits it separately at 13.0-26.1C (13.0C from regional expertise close to the western-Mediterranean winter minimum, 26.1C as the 97th percentile of n=2105). The pilot parameterises large fish only, so ?sizeClass=small is refused with insufficient_data rather than answered with the large-fish band."
+      ],
+      "evidence": [
+        {
+          "key": "druon2016",
+          "citation": "Druon et al. 2016, PLoS ONE 11(3):e0150152 - Spatial and temporal characteristics of Atlantic bluefin tuna spawning grounds in the western Mediterranean",
+          "usedFor": "feeding and spawning thermal envelopes, CHL and SSHa requirements, dSST30, size split"
+        },
+        {
+          "key": "druon2011",
+          "citation": "Druon et al. 2011, Prog. Oceanogr. 90:1-12 - Tracers of the habitat of Atlantic bluefin tuna (gradCHL as the food-availability proxy)",
+          "usedFor": "why the chlorophyll-a GRADIENT, not concentration, is the required feeding factor"
+        },
+        {
+          "key": "walli2009",
+          "citation": "Walli et al. 2009 via Druon et al. 2016 - 79 +/- 8 % of time in the first 50 m",
+          "usedFor": "water-column depth scope and preferred band"
+        },
+        {
+          "key": "iccatgbyp",
+          "citation": "ICCAT GBYP - western Mediterranean bluefin feeding season, May-September",
+          "usedFor": "feeding season peak months"
+        }
+      ]
     },
     {
       "id": "little_tunny",
       "commonName": "Little Tunny",
       "scientificName": "Euthynnus alletteratus",
-      "aliases": ["bonito", "tunaigger", "false albacore"],
+      "aliases": [
+        "bonito",
+        "tunaigger",
+        "false albacore"
+      ],
       "guild": "pelagic",
-      "depth": { "gateMinM": 0, "gateMaxM": 150, "prefMinM": 0, "prefMaxM": 30, "scope": "water_column", "conf": "expert", "src": "oceanic scombrid living in the upper water column; seafloor depth is not a constraint" },
-      "sstC": { "gateMin": 15.0, "gateMax": 28.0, "idealMin": 20.0, "idealMax": 26.0, "conf": "expert", "src": "standard warm-water scombrid range; not traced to a specific Mediterranean citation" },
+      "depth": {
+        "gateMinM": 0,
+        "gateMaxM": 150,
+        "prefMinM": 0,
+        "prefMaxM": 30,
+        "scope": "water_column",
+        "conf": "expert",
+        "src": "oceanic scombrid living in the upper water column; seafloor depth is not a constraint"
+      },
+      "sstC": {
+        "gateMin": 15.0,
+        "gateMax": 28.0,
+        "idealMin": 20.0,
+        "idealMax": 26.0,
+        "conf": "expert",
+        "src": "standard warm-water scombrid range; not traced to a specific Mediterranean citation"
+      },
       "windKmhMax": 25,
       "swellMMax": 1.2,
-      "weights": { "sst": 0.30, "depth": 0.20, "wind": 0.20, "swell": 0.15, "solunar": 0.15 },
+      "weights": {
+        "sst": 0.3,
+        "depth": 0.2,
+        "wind": 0.2,
+        "swell": 0.15,
+        "solunar": 0.15
+      },
       "note": "PFZ treats the common Spanish/Maghrebi name 'bonito' as this species. The global SpeciesNormalizer keeps bonito separate for the SoCal pipeline; the two vocabularies are intentionally not merged."
     },
     {
       "id": "swordfish",
       "commonName": "Swordfish",
       "scientificName": "Xiphias gladius",
-      "aliases": ["espada"],
+      "aliases": [
+        "espada"
+      ],
       "guild": "deep_pelagic",
-      "depth": { "gateMinM": 0, "gateMaxM": 800, "prefMinM": 0, "prefMaxM": 40, "scope": "water_column", "conf": "expert", "src": "diel vertical migrant; surface-feeding at night, deep by day in the water column - regularly found over ocean basins far deeper than 800m of seabed" },
-      "sstC": { "gateMin": 16.0, "gateMax": 28.0, "idealMin": 20.0, "idealMax": 26.0, "conf": "expert" },
+      "depth": {
+        "gateMinM": 0,
+        "gateMaxM": 800,
+        "prefMinM": 0,
+        "prefMaxM": 40,
+        "scope": "water_column",
+        "conf": "expert",
+        "src": "diel vertical migrant; surface-feeding at night, deep by day in the water column - regularly found over ocean basins far deeper than 800m of seabed"
+      },
+      "sstC": {
+        "gateMin": 16.0,
+        "gateMax": 28.0,
+        "idealMin": 20.0,
+        "idealMax": 26.0,
+        "conf": "expert"
+      },
       "windKmhMax": 30,
       "swellMMax": 2.0,
-      "weights": { "sst": 0.30, "depth": 0.20, "wind": 0.20, "swell": 0.15, "solunar": 0.15 },
+      "weights": {
+        "sst": 0.3,
+        "depth": 0.2,
+        "wind": 0.2,
+        "swell": 0.15,
+        "solunar": 0.15
+      },
       "note": "CORRECTION to an earlier assumption: swordfish is NOT depth-blocked at coastal spots. It is a night surface feeder, so the preferred band is the top 40 m. Night timing matters more than depth for this species."
     },
     {
       "id": "sardinella",
       "commonName": "Round Sardinella",
       "scientificName": "Sardinella aurita",
-      "aliases": ["sardinelle", "allache"],
+      "aliases": [
+        "sardinelle",
+        "allache"
+      ],
       "guild": "small_pelagic",
-      "depth": { "gateMinM": 0, "gateMaxM": 150, "prefMinM": 0, "prefMaxM": 100, "conf": "cited", "src": "Sabates2009: clear preference for spawning in coastal areas shallower than 100m; larvae extend offshore to the 150m isobath" },
-      "sstC": { "gateMin": 20.0, "gateMax": 27.0, "idealMin": 23.0, "idealMax": 26.5, "conf": "cited", "src": "Sabates2009 (MEPS 385:227-236): eggs and larvae appear between 20-27C, maximum spawning intensity 23-26.5C, peak egg density at 25.5C" },
-      "sstCByRegion": {
-        "maghreb": { "gateMin": 16.0, "gateMax": 24.0, "idealMin": 18.0, "idealMax": 21.5, "conf": "cited", "src": "Ettahiri2003 / Quaatey&Maravelias1999: optimal spawning temperature 18-21.1C off the Western Sahara and on the West African coast; the NW-Med band of 23-26.5C does not apply here" }
+      "depth": {
+        "gateMinM": 0,
+        "gateMaxM": 150,
+        "prefMinM": 0,
+        "prefMaxM": 100,
+        "conf": "cited",
+        "src": "Sabates2009: clear preference for spawning in coastal areas shallower than 100m; larvae extend offshore to the 150m isobath"
       },
-      "chlMgM3": { "gateMin": 0.05, "gateMax": 10.0, "idealMin": 0.27, "idealMax": 3.0, "preference": "band", "conf": "cited", "src": "Sabates2009: spawning associated with high surface chl-a >0.27 ug/L" },
-      "season": { "peakMonths": [6, 7, 8, 9], "closedMonths": [], "conf": "cited", "src": "Palomera&Sabates1990 / Somarakis2002 / Sabates2009: short summer spawning season from the end of June to September" },
-      "weights": { "sst": 0.30, "chl": 0.25, "depth": 0.15, "wind": 0.10, "swell": 0.10, "solunar": 0.05, "season": 0.05 },
+      "sstC": {
+        "gateMin": 20.0,
+        "gateMax": 27.0,
+        "idealMin": 23.0,
+        "idealMax": 26.5,
+        "conf": "cited",
+        "src": "Sabates2009 (MEPS 385:227-236): eggs and larvae appear between 20-27C, maximum spawning intensity 23-26.5C, peak egg density at 25.5C"
+      },
+      "sstCByRegion": {
+        "maghreb": {
+          "gateMin": 16.0,
+          "gateMax": 24.0,
+          "idealMin": 18.0,
+          "idealMax": 21.5,
+          "conf": "cited",
+          "src": "Ettahiri2003 / Quaatey&Maravelias1999: optimal spawning temperature 18-21.1C off the Western Sahara and on the West African coast; the NW-Med band of 23-26.5C does not apply here"
+        }
+      },
+      "chlMgM3": {
+        "gateMin": 0.05,
+        "gateMax": 10.0,
+        "idealMin": 0.27,
+        "idealMax": 3.0,
+        "preference": "band",
+        "conf": "cited",
+        "src": "Sabates2009: spawning associated with high surface chl-a >0.27 ug/L"
+      },
+      "season": {
+        "peakMonths": [
+          6,
+          7,
+          8,
+          9
+        ],
+        "closedMonths": [],
+        "conf": "cited",
+        "src": "Palomera&Sabates1990 / Somarakis2002 / Sabates2009: short summer spawning season from the end of June to September"
+      },
+      "weights": {
+        "sst": 0.3,
+        "chl": 0.25,
+        "depth": 0.15,
+        "wind": 0.1,
+        "swell": 0.1,
+        "solunar": 0.05,
+        "season": 0.05
+      },
       "note": "REGION-DEPENDENT: the NW-Med thermal band (23-26.5C) and the Maghreb band (18-21.5C) differ by ~5C, so the Maghreb override is not optional. Salinity is also cited as a driver (<37.5 preferred) but the app has no salinity data source, so it is not scored."
     },
     {
       "id": "sardine",
       "commonName": "European Sardine",
       "scientificName": "Sardina pilchardus",
-      "aliases": ["sardines", "sardina"],
+      "aliases": [
+        "sardines",
+        "sardina"
+      ],
       "guild": "small_pelagic",
-      "depth": { "gateMinM": 0, "gateMaxM": 200, "prefMinM": 0, "prefMaxM": 110, "conf": "cited", "src": "Tugores2011 (MEPS 443:181): adults present in waters <110m deep; Bellido2008: preference shallower than 100m" },
-      "sstC": { "gateMin": 10.0, "gateMax": 28.0, "idealMin": 15.0, "idealMax": 23.0, "conf": "cited", "src": "Tugores2011: adult probability highest at SST 20-26C in summer, 14-17C in winter; Palomera2007: spawning preference 12-14C in the Catalan Sea, up to 19C" },
-      "chlMgM3": { "gateMin": 0.05, "gateMax": 6.0, "idealMin": 0.13, "idealMax": 1.49, "preference": "band", "conf": "cited", "src": "Tugores2011: higher presence probability at CHLA 0.13-1.49 mg/m3 (with SLA 2-10 cm) and CHLA >0.45 to <4.5 mg/m3 in another season" },
-      "season": { "peakMonths": [10, 11, 12, 1, 2, 3, 4], "closedMonths": [], "conf": "expert", "src": "Sardine spawn Oct-Apr in the Mediterranean (Regner1987, Olivar2003, Palomera2007, Ganias2007) which is the opposite of anchovy. peakMonths tracks the spawning/aggregation season and decays smoothly outside it. closedMonths is deliberately EMPTY: sardine are present and catchable in Jul-Aug, they are just nursery-dominated then, so gating them would report a false absence" },
-      "weights": { "sst": 0.30, "chl": 0.20, "depth": 0.15, "wind": 0.10, "swell": 0.10, "solunar": 0.05, "season": 0.10 },
-      "note": "Sardine and anchovy have non-overlapping spawning periods in the Med: sardine autumn-winter, anchovy spring-summer (Palomera2007). Sardine SST gate is wide because the cited values span the adult summer range and the much colder winter spawning range."
+      "depth": {
+        "gateMinM": 10,
+        "gateMaxM": 200,
+        "prefMinM": 30,
+        "prefMaxM": 110,
+        "conf": "cited",
+        "src": "Tugores et al. 2011 (MEPS 443:181): adult sardine in the Balearic Sea, <110 m in the spawning and nursery models. The narrow end comes from Schismenou et al. 2014 (PLOS ONE 9(7):e101498): Strait of Sicily 30-75 m, North Aegean 10-50 m"
+      },
+      "sstC": {
+        "gateMin": 10.0,
+        "gateMax": 28.0,
+        "idealMin": 15.0,
+        "idealMax": 23.0,
+        "conf": "cited",
+        "src": "Tugores et al. 2011: adult probability highest at SST 20-26C in summer and 14-17C in winter; Palomera et al. 2007: spawning preference 12-16C, up to 19C in the Catalan Sea"
+      },
+      "chlMgM3": {
+        "gateMin": 0.05,
+        "gateMax": 6.0,
+        "idealMin": 0.13,
+        "idealMax": 1.49,
+        "preference": "band",
+        "conf": "cited",
+        "src": "Tugores2011: higher presence probability at CHLA 0.13-1.49 mg/m3 (with SLA 2-10 cm) and CHLA >0.45 to <4.5 mg/m3 in another season"
+      },
+      "season": {
+        "peakMonths": [
+          10,
+          11,
+          12,
+          1,
+          2,
+          3,
+          4
+        ],
+        "closedMonths": [],
+        "conf": "expert",
+        "src": "Sardine spawn Oct-Apr in the Mediterranean (Regner1987, Olivar2003, Palomera2007, Ganias2007) which is the opposite of anchovy. peakMonths tracks the spawning/aggregation season and decays smoothly outside it. closedMonths is deliberately EMPTY: sardine are present and catchable in Jul-Aug, they are just nursery-dominated then, so gating them would report a false absence"
+      },
+      "weights": {
+        "sst": 0.35,
+        "depth": 0.3,
+        "chl": 0.2,
+        "season": 0.1,
+        "wind": 0.05
+      },
+      "note": "Sardine and anchovy have non-overlapping Mediterranean spawning periods - sardine autumn-winter, anchovy spring-summer (Palomera et al. 2007) - so peakMonths tracks the spawning and aggregation season and closedMonths is deliberately EMPTY: sardine are present and catchable in Jul-Aug, they are simply nursery-dominated, and gating them would report a false absence. This species is the reason byRegion generalises the older single sstCByRegion field: it needs four basins, not one SST number. There is deliberately NO maghreb override: the south Algerian shelf is sardine habitat but the pilot has no cited band for it, and an override that invents one is exactly the failure this mechanism exists to prevent, so the basin-wide band applies and the gap is named here.",
+      "byRegion": {
+        "eastern_med": {
+          "sstC": {
+            "gateMin": 12.0,
+            "gateMax": 24.0,
+            "idealMin": 16.0,
+            "idealMax": 22.0,
+            "conf": "cited",
+            "src": "Tugores et al. 2011 summer Aegean model: SST < 22C in June with depth < 65 m; Somarakis et al. 2006 gives 17-19C for Aegean spawning"
+          },
+          "depth": {
+            "gateMinM": 10,
+            "gateMaxM": 110,
+            "prefMinM": 10,
+            "prefMaxM": 50,
+            "conf": "cited",
+            "src": "Tugores et al. 2011: Aegean June depth < 65 m; Schismenou et al. 2014: North Aegean 10-50 m. The Aegean is shallow and enclosed and sardine there are shallower than basin-wide"
+          },
+          "note": "Aegean: cooler and shallower than the basin-wide band. Both overrides come from the same life-cycle line of work, so they are consistent with each other rather than independent."
+        },
+        "western_med": {
+          "sstC": {
+            "gateMin": 14.0,
+            "gateMax": 18.5,
+            "idealMin": 16.0,
+            "idealMax": 18.0,
+            "conf": "cited",
+            "src": "Tugores et al. 2011: Spanish autumn 16-18.5C with sea level anomaly 1-5 cm, and 14-17C with SLA -5-0 cm. The two branches of the documented SLA x SST interaction are merged into one envelope because this build has no sea-level-anomaly input to switch between them"
+          },
+          "chlMgM3": {
+            "gateMin": 0.45,
+            "gateMax": 4.5,
+            "idealMin": 0.8,
+            "idealMax": 2.5,
+            "conf": "cited",
+            "src": "Tugores et al. 2011: Spanish autumn CHL 0.45-4.5 mg/m3 - richer autumn water than the basin-wide 0.13-1.49 mg/m3"
+          },
+          "depth": {
+            "gateMinM": 10,
+            "gateMaxM": 110,
+            "prefMinM": 30,
+            "prefMaxM": 90,
+            "conf": "cited",
+            "src": "Tugores et al. 2011: Spanish autumn depth < 90 m"
+          },
+          "note": "Western: the source couples autumn SST to sea level anomaly, which this build cannot resolve, so the two documented branches are collapsed into one band and the loss of that interaction is disclosed here."
+        },
+        "central_med": {
+          "depth": {
+            "gateMinM": 30,
+            "gateMaxM": 110,
+            "prefMinM": 30,
+            "prefMaxM": 75,
+            "conf": "cited",
+            "src": "Schismenou et al. 2014: Strait of Sicily 30-75 m. Sardine also select LOW eddy kinetic energy (<200 cm2/s2), i.e. the quieter, more coastal part of the channel - that half of the criterion is unscorable and named below"
+          },
+          "note": "Central: the Strait of Sicily band is the tightest and best-resolved one in the literature for this species, so this is a real override rather than a guess."
+        }
+      },
+      "requiredFactors": [
+        "depth",
+        "sst"
+      ],
+      "unscorableRequirements": [
+        "Bottom-layer salinity: Schismenou et al. 2014 document sardine actively AVOIDING bottom-layer salinity above 38.4 while tolerating up to 38.5 in the upper layer. An avoidance band cannot be expressed as a positive score without inventing a response to it, so it is declared here instead of approximated.",
+        "PAR: < 55 E m-2 d-1 selected (Schismenou et al. 2014).",
+        "Distance to the coast: < 250 km selected for egg retention (Frontiers 2022 13:956654).",
+        "Eddy kinetic energy: sardine select < 200 cm2/s2, i.e. weaker currents (Schismenou et al. 2014). There is no EKE product in this build."
+      ],
+      "evidence": [
+        {
+          "key": "tugores2011",
+          "citation": "Tugores et al. 2011, Mar. Ecol. Prog. Ser. 443:181-195 - 3D life-cycle model, European sardine, NW Mediterranean",
+          "usedFor": "basin-wide and per-region SST, depth and CHL bands"
+        },
+        {
+          "key": "schismenou2014",
+          "citation": "Schismenou et al. 2014, PLOS ONE 9(7):e101498 - sardine habitat in the Strait of Sicily and the North Aegean",
+          "usedFor": "central and eastern depth bands, bottom salinity avoidance, eddy kinetic energy"
+        },
+        {
+          "key": "palomera2007",
+          "citation": "Palomera et al. 2007 - spawning SST 12-16C, up to 19C in the Catalan Sea",
+          "usedFor": "western and basin-wide thermal gate"
+        },
+        {
+          "key": "gkanasos2021",
+          "citation": "Gkanasos et al. 2021, 3D life-cycle model parameterisation",
+          "usedFor": "spawning trigger: SST < 16C, November-April"
+        }
+      ]
     },
     {
       "id": "anchovy",
       "commonName": "European Anchovy",
       "scientificName": "Engraulis encrasicolus",
-      "aliases": ["anchoa", "anchois"],
+      "aliases": [
+        "anchoa",
+        "anchois"
+      ],
       "guild": "small_pelagic",
-      "depth": { "gateMinM": 0, "gateMaxM": 180, "prefMinM": 10, "prefMaxM": 100, "conf": "cited", "src": "Bonanno2014 (PLoS ONE 9:e101498): depth selection 30-100m in the Strait of Sicily, 10-100m in the North Aegean; Giannoulaki2013: adult habitat extends to 180m in early autumn" },
-      "sstC": { "gateMin": 14.0, "gateMax": 26.0, "idealMin": 17.0, "idealMax": 23.0, "conf": "expert", "src": "CONFLICTING EVIDENCE, deliberately not cited: Bonanno2014 finds anchovy selecting UML <18C in the Strait of Sicily but >21C in the North Aegean; Fernandez-Corredor2018 review reports mixed temperature effects. A single basin-wide band would misrepresent both. Bottom temperature >15.5C is preferred by both species (Bonanno2014)." },
-      "chlMgM3": { "gateMin": 0.05, "gateMax": 10.0, "idealMin": 0.3, "idealMax": 3.0, "preference": "band", "conf": "expert", "src": "Giannoulaki2013 identifies sea surface chlorophyll as important in all anchovy habitat models, but the reviewed studies do not yield a single transferable numeric band" },
-      "season": { "peakMonths": [4, 5, 6, 7, 8], "closedMonths": [], "conf": "cited", "src": "Palomera2007: anchovy spawns spring-summer, non-overlapping with autumn-winter sardine" },
-      "weights": { "sst": 0.30, "chl": 0.20, "depth": 0.20, "wind": 0.10, "swell": 0.05, "solunar": 0.05, "season": 0.10 },
+      "depth": {
+        "gateMinM": 0,
+        "gateMaxM": 180,
+        "prefMinM": 10,
+        "prefMaxM": 100,
+        "conf": "cited",
+        "src": "Bonanno2014 (PLoS ONE 9:e101498): depth selection 30-100m in the Strait of Sicily, 10-100m in the North Aegean; Giannoulaki2013: adult habitat extends to 180m in early autumn"
+      },
+      "sstC": {
+        "gateMin": 14.0,
+        "gateMax": 26.0,
+        "idealMin": 17.0,
+        "idealMax": 23.0,
+        "conf": "expert",
+        "src": "CONFLICTING EVIDENCE, deliberately not cited: Bonanno2014 finds anchovy selecting UML <18C in the Strait of Sicily but >21C in the North Aegean; Fernandez-Corredor2018 review reports mixed temperature effects. A single basin-wide band would misrepresent both. Bottom temperature >15.5C is preferred by both species (Bonanno2014)."
+      },
+      "chlMgM3": {
+        "gateMin": 0.05,
+        "gateMax": 10.0,
+        "idealMin": 0.3,
+        "idealMax": 3.0,
+        "preference": "band",
+        "conf": "expert",
+        "src": "Giannoulaki2013 identifies sea surface chlorophyll as important in all anchovy habitat models, but the reviewed studies do not yield a single transferable numeric band"
+      },
+      "season": {
+        "peakMonths": [
+          4,
+          5,
+          6,
+          7,
+          8
+        ],
+        "closedMonths": [],
+        "conf": "cited",
+        "src": "Palomera2007: anchovy spawns spring-summer, non-overlapping with autumn-winter sardine"
+      },
+      "weights": {
+        "sst": 0.3,
+        "chl": 0.2,
+        "depth": 0.2,
+        "wind": 0.1,
+        "swell": 0.05,
+        "solunar": 0.05,
+        "season": 0.1
+      },
       "note": "Giannoulaki2013: bottom depth and surface chlorophyll were the variables important in all anchovy models, over the continental shelf at every life stage. Salinity is also cited (anchovy avoids >37.5 in the Aegean, selects >37.8 in Sicily) but the app has no salinity source."
     },
     {
       "id": "horse_mackerel",
       "commonName": "Horse Mackerel",
       "scientificName": "Trachurus trachurus",
-      "aliases": ["jack mackerel", "caballa", "chincharda"],
+      "aliases": [
+        "jack mackerel",
+        "caballa",
+        "chincharda"
+      ],
       "guild": "small_pelagic",
-      "depth": { "gateMinM": 0, "gateMaxM": 300, "prefMinM": 0, "prefMaxM": 80, "conf": "expert" },
-      "weights": { "sst": 0.30, "chl": 0.25, "depth": 0.20, "wind": 0.10, "swell": 0.10, "solunar": 0.05 },
+      "depth": {
+        "gateMinM": 0,
+        "gateMaxM": 300,
+        "prefMinM": 0,
+        "prefMaxM": 80,
+        "conf": "expert"
+      },
+      "weights": {
+        "sst": 0.3,
+        "chl": 0.25,
+        "depth": 0.2,
+        "wind": 0.1,
+        "swell": 0.1,
+        "solunar": 0.05
+      },
       "note": "sstC and chlMgM3 bands not yet researched."
     },
     {
@@ -102,113 +589,324 @@
       "scientificName": "Scomber scombrus",
       "aliases": [],
       "guild": "small_pelagic",
-      "depth": { "gateMinM": 0, "gateMaxM": 300, "prefMinM": 0, "prefMaxM": 50, "conf": "expert" },
-      "weights": { "sst": 0.30, "chl": 0.25, "depth": 0.20, "wind": 0.10, "swell": 0.10, "solunar": 0.05 },
+      "depth": {
+        "gateMinM": 0,
+        "gateMaxM": 300,
+        "prefMinM": 0,
+        "prefMaxM": 50,
+        "conf": "expert"
+      },
+      "weights": {
+        "sst": 0.3,
+        "chl": 0.25,
+        "depth": 0.2,
+        "wind": 0.1,
+        "swell": 0.1,
+        "solunar": 0.05
+      },
       "note": "ASSUMED SPECIES: the user's roster said only 'Scomber', which is a genus. Defaulted to S. scombrus; alternative is S. japonicus. One-line change in this file and in PfzSpeciesAliases. sstC/chl bands not yet researched."
     },
     {
       "id": "bogue",
       "commonName": "Bogue",
       "scientificName": "Boops boops",
-      "aliases": ["boga"],
+      "aliases": [
+        "boga"
+      ],
       "guild": "demersal_pelagic",
-      "depth": { "gateMinM": 0, "gateMaxM": 200, "prefMinM": 5, "prefMaxM": 80, "conf": "expert" },
-      "weights": { "sst": 0.20, "depth": 0.30, "wind": 0.20, "swell": 0.15, "solunar": 0.15 },
+      "depth": {
+        "gateMinM": 0,
+        "gateMaxM": 200,
+        "prefMinM": 5,
+        "prefMaxM": 80,
+        "conf": "expert"
+      },
+      "weights": {
+        "sst": 0.2,
+        "depth": 0.3,
+        "wind": 0.2,
+        "swell": 0.15,
+        "solunar": 0.15
+      },
       "note": "sstC band not yet researched."
     },
     {
       "id": "common_dentex",
       "commonName": "Common Dentex",
       "scientificName": "Dentex dentex",
-      "aliases": ["dentex"],
+      "aliases": [
+        "dentex"
+      ],
       "guild": "demersal",
-      "depth": { "gateMinM": 20, "gateMaxM": 300, "prefMinM": 50, "prefMaxM": 150, "conf": "expert" },
-      "weights": { "sst": 0.20, "depth": 0.30, "wind": 0.20, "swell": 0.15, "solunar": 0.15 },
+      "depth": {
+        "gateMinM": 20,
+        "gateMaxM": 300,
+        "prefMinM": 50,
+        "prefMaxM": 150,
+        "conf": "expert"
+      },
+      "weights": {
+        "sst": 0.2,
+        "depth": 0.3,
+        "wind": 0.2,
+        "swell": 0.15,
+        "solunar": 0.15
+      },
       "note": "sstC band not yet researched."
     },
     {
       "id": "common_pandora",
       "commonName": "Common Pandora",
       "scientificName": "Pagellus erythrinus",
-      "aliases": ["pandora", "pargo"],
+      "aliases": [
+        "pandora",
+        "pargo"
+      ],
       "guild": "demersal",
-      "depth": { "gateMinM": 10, "gateMaxM": 200, "prefMinM": 30, "prefMaxM": 90, "conf": "expert" },
-      "weights": { "sst": 0.20, "depth": 0.30, "wind": 0.20, "swell": 0.15, "solunar": 0.15 },
+      "depth": {
+        "gateMinM": 10,
+        "gateMaxM": 200,
+        "prefMinM": 30,
+        "prefMaxM": 90,
+        "conf": "expert"
+      },
+      "weights": {
+        "sst": 0.2,
+        "depth": 0.3,
+        "wind": 0.2,
+        "swell": 0.15,
+        "solunar": 0.15
+      },
       "note": "sstC band not yet researched."
     },
     {
       "id": "dusky_grouper",
       "commonName": "Dusky Grouper",
       "scientificName": "Epinephelus marginatus",
-      "aliases": ["cherne"],
+      "aliases": [
+        "cherne"
+      ],
       "guild": "demersal",
-      "depth": { "gateMinM": 5, "gateMaxM": 200, "prefMinM": 20, "prefMaxM": 80, "conf": "expert" },
-      "weights": { "sst": 0.20, "depth": 0.30, "wind": 0.20, "swell": 0.15, "solunar": 0.15 },
+      "depth": {
+        "gateMinM": 5,
+        "gateMaxM": 200,
+        "prefMinM": 20,
+        "prefMaxM": 80,
+        "conf": "expert"
+      },
+      "weights": {
+        "sst": 0.2,
+        "depth": 0.3,
+        "wind": 0.2,
+        "swell": 0.15,
+        "solunar": 0.15
+      },
       "note": "Replaces the dropped generic 'Grouper' entry. sstC band not yet researched."
     },
     {
       "id": "white_grouper",
       "commonName": "White Grouper",
       "scientificName": "Epinephelus aeneus",
-      "aliases": ["mero blanco"],
+      "aliases": [
+        "mero blanco"
+      ],
       "guild": "demersal",
-      "depth": { "gateMinM": 5, "gateMaxM": 250, "prefMinM": 30, "prefMaxM": 100, "conf": "expert" },
-      "weights": { "sst": 0.20, "depth": 0.30, "wind": 0.20, "swell": 0.15, "solunar": 0.15 },
+      "depth": {
+        "gateMinM": 5,
+        "gateMaxM": 250,
+        "prefMinM": 30,
+        "prefMaxM": 100,
+        "conf": "expert"
+      },
+      "weights": {
+        "sst": 0.2,
+        "depth": 0.3,
+        "wind": 0.2,
+        "swell": 0.15,
+        "solunar": 0.15
+      },
       "note": "sstC band not yet researched."
     },
     {
       "id": "european_conger",
       "commonName": "European Conger",
       "scientificName": "Conger conger",
-      "aliases": ["conger", "congrio"],
+      "aliases": [
+        "conger",
+        "congrio"
+      ],
       "guild": "demersal",
-      "depth": { "gateMinM": 0, "gateMaxM": 1000, "prefMinM": 50, "prefMaxM": 300, "conf": "expert" },
-      "weights": { "sst": 0.15, "depth": 0.30, "wind": 0.20, "swell": 0.20, "solunar": 0.15 },
+      "depth": {
+        "gateMinM": 0,
+        "gateMaxM": 1000,
+        "prefMinM": 50,
+        "prefMaxM": 300,
+        "conf": "expert"
+      },
+      "weights": {
+        "sst": 0.15,
+        "depth": 0.3,
+        "wind": 0.2,
+        "swell": 0.2,
+        "solunar": 0.15
+      },
       "note": "sstC band not yet researched. Wide depth tolerance means the coastal spots are in-habitat but not preferred."
     },
     {
       "id": "european_hake",
       "commonName": "European Hake",
       "scientificName": "Merluccius merluccius",
-      "aliases": ["hake", "merlu"],
-      "guild": "demersal",
-      "depth": { "gateMinM": 30, "gateMaxM": 1000, "prefMinM": 100, "prefMaxM": 500, "conf": "cited", "src": "Bousquet et al. 2015 (Prog Oceanogr 128:131-153, Gulf of Lions): nursery habitat 38-312m, juveniles settle 60-160m, adults deeper" },
-      "weights": { "sst": 0.15, "depth": 0.35, "wind": 0.20, "swell": 0.15, "solunar": 0.15 },
-      "unscorableRequirements": [
-        "Bottom temperature: cited nursery optimum is 11.8-15.0C (Bousquet 2015), but the app measures SURFACE temperature only. No sstC band is defined for this species because applying a bottom-temperature range to SST would be scientifically wrong.",
-        "Bottom current speed: low-current nurseries are cited as the key requirement (Bousquet 2015) and the app has no bottom-current field.",
-        "Nursery substrate/settlement quality"
+      "aliases": [
+        "hake",
+        "merlu"
       ],
-      "note": "sstC deliberately OMITTED. The hake thermal evidence is bottom temperature at 60-312m, not sea surface temperature, so surfacing that band as a gate would gate out correct habitat. Score here reflects depth + sea state only and must be read with that limitation."
+      "guild": "demersal",
+      "depth": {
+        "gateMinM": 60,
+        "gateMaxM": 385,
+        "prefMinM": 100,
+        "prefMaxM": 250,
+        "conf": "cited",
+        "src": "Frontiers 2021 12:614675 (Iberian shelf, B-HSTHM 2005-2016 trawl surveys): 100-250 m with a 140-200 m optimum. Gate from Colloca et al. 2014 Table bottom-depth percentiles 28-385 m; supporting 60-160 m holds 73 % of numbers and 81 % of biomass (Morales-Nin & Moranta 2004). Colloca: the conditions recur over the outer shelf and the shelf break"
+      },
+      "weights": {
+        "bottom_temp": 0.35,
+        "depth": 0.25,
+        "bottom_current": 0.2,
+        "chl": 0.15,
+        "wind": 0.05
+      },
+      "unscorableRequirements": [
+        "Nursery substrate and settlement quality: Colloca et al. 2014 fit a Trophic term into the recruitment equation and the Iberian shelf study weights bottom habitat structure, and neither has a data source in this build.",
+        "Bottom substrate type: no bottom-type source exists, so the profile cannot distinguish a muddy outer-shelf nursery from a rocky one at the same depth and temperature."
+      ],
+      "note": "This is the profile that forced the required-factor mechanism. Colloca et al.'s habitat equation is a PRODUCT - Trophic x Depth x SBT x SBCmax - where any term at zero makes the cell zero, so depth + chlorophyll without bottom temperature is not a weaker hake score, it is a different model. sstC is deliberately OMITTED: the thermal evidence is BOTTOM temperature at 60-385 m and transposing it onto the surface would gate out correct habitat. The sources genuinely disagree and both are cited - Colloca finds SBT limiting while the 2021 Iberian study finds bathymetry dominant and SBT/substrate least relevant. PFZ takes the Iberian depth band and keeps SBT as a gate because a 15C bottom limit is the one point both agree on.",
+      "bottomTempC": {
+        "gateMin": 11.78,
+        "gateMax": 15.04,
+        "idealMin": 12.8,
+        "idealMax": 14.8,
+        "conf": "cited",
+        "src": "Colloca et al. 2014 (ENM): 5-95 percentile SBT 11.78-15.04C, with high-recruitment cells characterised by 13.8 +/- 1C. Gated rather than downweighted because Lleonart 2001 reports young hake absent from the north-western Mediterranean wherever bottom temperature exceeds 15C"
+      },
+      "bottomCurrentMs": {
+        "gateMin": 0.0,
+        "gateMax": 0.034,
+        "preference": "lower_better",
+        "conf": "cited",
+        "src": "Colloca et al. 2014 Table: SBC max 0.034 m/s, and cells with biomass > 100 kg/km2 sit below 0.032 m/s. m/s and not km/h: 0.034 m/s is 0.12 km/h, and a unit slip would silently invert every cell in the profile"
+      },
+      "chlMgM3": {
+        "gateMin": 0.1,
+        "gateMax": 0.91,
+        "idealMin": 0.2,
+        "idealMax": 0.5,
+        "conf": "cited",
+        "src": "Colloca et al. 2014: 5-95 percentile CHL 0.10-0.91 mg/m3, median 0.26, over the 0-5 months before sampling"
+      },
+      "requiredFactors": [
+        "depth",
+        "bottom_temp",
+        "bottom_current"
+      ],
+      "evidence": [
+        {
+          "key": "colloca2014",
+          "citation": "Colloca et al. 2014, J. Biogeogr. 41:254-272 (ENM, Mediterranean recruits)",
+          "usedFor": "bottom temperature band, bottom current limit, chlorophyll range, depth percentiles"
+        },
+        {
+          "key": "frontiers2021",
+          "citation": "Frontiers in Marine Science 8:614675 (2021), Iberian shelf B-HSTHM 2005-2016",
+          "usedFor": "the 100-250 m depth band with a 140-200 m optimum"
+        },
+        {
+          "key": "lleonart2001",
+          "citation": "Lleonart 2001 - young hake absent from the north-western Mediterranean where bottom temperature exceeds 15C",
+          "usedFor": "treating bottom temperature as a hard gate rather than a soft score"
+        },
+        {
+          "key": "moralesnin2004",
+          "citation": "Morales-Nin & Moranta 2004, W Mediterranean shelf",
+          "usedFor": "supporting 60-160 m depth band"
+        }
+      ]
     },
     {
       "id": "european_seabass",
       "commonName": "European Seabass",
       "scientificName": "Dicentrarchus labrax",
-      "aliases": ["sea bass", "loup de mer"],
+      "aliases": [
+        "sea bass",
+        "loup de mer"
+      ],
       "guild": "demersal",
-      "depth": { "gateMinM": 0, "gateMaxM": 200, "prefMinM": 5, "prefMaxM": 40, "conf": "expert" },
-      "weights": { "sst": 0.20, "depth": 0.25, "wind": 0.20, "swell": 0.15, "solunar": 0.20 },
+      "depth": {
+        "gateMinM": 0,
+        "gateMaxM": 200,
+        "prefMinM": 5,
+        "prefMaxM": 40,
+        "conf": "expert"
+      },
+      "weights": {
+        "sst": 0.2,
+        "depth": 0.25,
+        "wind": 0.2,
+        "swell": 0.15,
+        "solunar": 0.2
+      },
       "note": "sstC band not yet researched."
     },
     {
       "id": "gilthead_seabream",
       "commonName": "Gilthead Seabream",
       "scientificName": "Sparus aurata",
-      "aliases": ["gilthead", "dorada", "dorade", "orata"],
+      "aliases": [
+        "gilthead",
+        "dorada",
+        "dorade",
+        "orata"
+      ],
       "guild": "demersal",
-      "depth": { "gateMinM": 0, "gateMaxM": 150, "prefMinM": 5, "prefMaxM": 30, "conf": "expert" },
-      "weights": { "sst": 0.20, "depth": 0.25, "wind": 0.20, "swell": 0.15, "solunar": 0.20 },
+      "depth": {
+        "gateMinM": 0,
+        "gateMaxM": 150,
+        "prefMinM": 5,
+        "prefMaxM": 30,
+        "conf": "expert"
+      },
+      "weights": {
+        "sst": 0.2,
+        "depth": 0.25,
+        "wind": 0.2,
+        "swell": 0.15,
+        "solunar": 0.2
+      },
       "note": "sstC band not yet researched."
     },
     {
       "id": "white_seabream",
       "commonName": "White Seabream",
       "scientificName": "Diplodus sargus",
-      "aliases": ["white bream", "sargo"],
+      "aliases": [
+        "white bream",
+        "sargo"
+      ],
       "guild": "demersal",
-      "depth": { "gateMinM": 0, "gateMaxM": 200, "prefMinM": 5, "prefMaxM": 50, "conf": "expert" },
-      "weights": { "sst": 0.20, "depth": 0.25, "wind": 0.20, "swell": 0.15, "solunar": 0.20 },
+      "depth": {
+        "gateMinM": 0,
+        "gateMaxM": 200,
+        "prefMinM": 5,
+        "prefMaxM": 50,
+        "conf": "expert"
+      },
+      "weights": {
+        "sst": 0.2,
+        "depth": 0.25,
+        "wind": 0.2,
+        "swell": 0.15,
+        "solunar": 0.2
+      },
       "note": "sstC band not yet researched."
     },
     {
@@ -217,9 +915,30 @@
       "scientificName": "Mullus surmuletus",
       "aliases": [],
       "guild": "demersal",
-      "depth": { "gateMinM": 5, "gateMaxM": 310, "prefMinM": 28, "prefMaxM": 200, "conf": "cited", "src": "Machias, Somarakis & Tsimenides 1998 (MEPS 166:247-257, Cretan shelf): distributed 28-310m, abundance negatively correlated with depth; Macpherson & Duarte 1991: 12-182m; Tserpes et al. 2002 (Sci Mar): both Mullus species mostly shallower than 200m" },
-      "season": { "peakMonths": [4, 5], "closedMonths": [], "conf": "cited", "src": "Machias et al. 1998: spawning April-May, with movement between depth strata" },
-      "weights": { "sst": 0.20, "depth": 0.30, "wind": 0.20, "swell": 0.15, "solunar": 0.15 },
+      "depth": {
+        "gateMinM": 5,
+        "gateMaxM": 310,
+        "prefMinM": 28,
+        "prefMaxM": 200,
+        "conf": "cited",
+        "src": "Machias, Somarakis & Tsimenides 1998 (MEPS 166:247-257, Cretan shelf): distributed 28-310m, abundance negatively correlated with depth; Macpherson & Duarte 1991: 12-182m; Tserpes et al. 2002 (Sci Mar): both Mullus species mostly shallower than 200m"
+      },
+      "season": {
+        "peakMonths": [
+          4,
+          5
+        ],
+        "closedMonths": [],
+        "conf": "cited",
+        "src": "Machias et al. 1998: spawning April-May, with movement between depth strata"
+      },
+      "weights": {
+        "sst": 0.2,
+        "depth": 0.3,
+        "wind": 0.2,
+        "swell": 0.15,
+        "solunar": 0.15
+      },
       "unscorableRequirements": [
         "Bottom temperature: cited range 13.6-23.8C at 28-310m (Machias 1998) is bottom, not surface; no sstC band is defined because the app only measures surface temperature"
       ],
@@ -231,8 +950,21 @@
       "scientificName": "Mullus barbatus",
       "aliases": [],
       "guild": "demersal",
-      "depth": { "gateMinM": 10, "gateMaxM": 200, "prefMinM": 50, "prefMaxM": 200, "conf": "cited", "src": "Tserpes et al. 2002 (Sci Mar): M. barbatus concentrated in the 10-50, 50-100 and 100-200m strata, rarely deeper" },
-      "weights": { "sst": 0.20, "depth": 0.30, "wind": 0.20, "swell": 0.15, "solunar": 0.15 },
+      "depth": {
+        "gateMinM": 10,
+        "gateMaxM": 200,
+        "prefMinM": 50,
+        "prefMaxM": 200,
+        "conf": "cited",
+        "src": "Tserpes et al. 2002 (Sci Mar): M. barbatus concentrated in the 10-50, 50-100 and 100-200m strata, rarely deeper"
+      },
+      "weights": {
+        "sst": 0.2,
+        "depth": 0.3,
+        "wind": 0.2,
+        "swell": 0.15,
+        "solunar": 0.15
+      },
       "unscorableRequirements": [
         "Bottom temperature: the Mullus thermal evidence is bottom temperature (13.6-23.8C, Machias 1998) and the app only measures surface temperature, so no sstC band is defined"
       ],
@@ -242,20 +974,50 @@
       "id": "red_scorpiofish",
       "commonName": "Red Scorpionfish",
       "scientificName": "Scorpaena porcus",
-      "aliases": ["scorpionfish", "escorpena"],
+      "aliases": [
+        "scorpionfish",
+        "escorpena"
+      ],
       "guild": "demersal",
-      "depth": { "gateMinM": 5, "gateMaxM": 200, "prefMinM": 10, "prefMaxM": 50, "conf": "expert" },
-      "weights": { "sst": 0.20, "depth": 0.25, "wind": 0.20, "swell": 0.15, "solunar": 0.20 },
+      "depth": {
+        "gateMinM": 5,
+        "gateMaxM": 200,
+        "prefMinM": 10,
+        "prefMaxM": 50,
+        "conf": "expert"
+      },
+      "weights": {
+        "sst": 0.2,
+        "depth": 0.25,
+        "wind": 0.2,
+        "swell": 0.15,
+        "solunar": 0.2
+      },
       "note": "sstC band not yet researched."
     },
     {
       "id": "common_sole",
       "commonName": "Common Sole",
       "scientificName": "Solea solea",
-      "aliases": ["sole", "lenguado"],
+      "aliases": [
+        "sole",
+        "lenguado"
+      ],
       "guild": "demersal",
-      "depth": { "gateMinM": 0, "gateMaxM": 200, "prefMinM": 20, "prefMaxM": 80, "conf": "expert" },
-      "weights": { "sst": 0.20, "depth": 0.30, "wind": 0.20, "swell": 0.15, "solunar": 0.15 },
+      "depth": {
+        "gateMinM": 0,
+        "gateMaxM": 200,
+        "prefMinM": 20,
+        "prefMaxM": 80,
+        "conf": "expert"
+      },
+      "weights": {
+        "sst": 0.2,
+        "depth": 0.3,
+        "wind": 0.2,
+        "swell": 0.15,
+        "solunar": 0.15
+      },
       "unscorableRequirements": [
         "Sandy/muddy substrate: common sole is a sand-dwelling flatfish and is effectively absent from rocky ground, but the app has no bottom-type source. Substrate is not a missing FACTOR (it is not in the weights at all) but it is a real decision variable the score is blind to."
       ],
@@ -265,36 +1027,229 @@
       "id": "grey_mullet",
       "commonName": "Grey Mullet",
       "scientificName": "Mugil cephalus",
-      "aliases": ["mullet"],
+      "aliases": [
+        "mullet"
+      ],
       "guild": "inshore",
-      "depth": { "gateMinM": 0, "gateMaxM": 30, "prefMinM": 0, "prefMaxM": 5, "conf": "expert" },
-      "weights": { "sst": 0.20, "depth": 0.30, "wind": 0.20, "swell": 0.10, "solunar": 0.20 },
+      "depth": {
+        "gateMinM": 0,
+        "gateMaxM": 30,
+        "prefMinM": 0,
+        "prefMaxM": 5,
+        "conf": "expert"
+      },
+      "weights": {
+        "sst": 0.2,
+        "depth": 0.3,
+        "wind": 0.2,
+        "swell": 0.1,
+        "solunar": 0.2
+      },
       "note": "Near-surface schooling species. Depth is the dominant factor. sstC band not yet researched."
     },
     {
       "id": "common_octopus",
       "commonName": "Common Octopus",
       "scientificName": "Octopus vulgaris",
-      "aliases": ["octopus", "pulpo"],
-      "guild": "cephalopod",
-      "depth": { "gateMinM": 0, "gateMaxM": 150, "prefMinM": 5, "prefMaxM": 30, "conf": "cited", "src": "Guerra et al. 2015 (Fish Res, Rias Baixas / Cies): preference for spawning on hard bottom substrate at moderate depth, ~20m, with protection proposed for the 5-30m band; Otero et al. 2005: exploited from 5-7m to a maximum of 150m" },
-      "season": { "peakMonths": [3, 4, 5, 6], "closedMonths": [], "conf": "cited", "src": "Garofalo et al. 2010 (ICES J Mar Sci, Strait of Sicily): peak spawning in spring/summer with peak recruitment in autumn; FAO: Mediterranean spawning March-October, peaking spring to early summer" },
-      "weights": { "sst": 0.20, "depth": 0.25, "wind": 0.15, "swell": 0.15, "solunar": 0.25 },
-      "unscorableRequirements": [
-        "Hard bottom substrate: spawning is documented as strongly tied to hard bottom (Guerra et al. 2015) and the species shelters in crevices, but the app has no bottom-type source. A high PFZ here does NOT mean suitable ground was found."
+      "aliases": [
+        "octopus",
+        "pulpo"
       ],
-      "note": "Emerges on rocky substrate at night, so solunar carries the largest weight. Substrate is the single most decision-relevant variable for this species and it is precisely the one the app cannot see, hence unscorableRequirements rather than silence."
+      "guild": "cephalopod",
+      "depth": {
+        "gateMinM": 0,
+        "gateMaxM": 150,
+        "prefMinM": 5,
+        "prefMaxM": 30,
+        "conf": "cited",
+        "src": "Guerra et al. 2015 (Fish Res, Rias Baixas / Cies): preference for spawning on hard bottom substrate at moderate depth, ~20m, with protection proposed for the 5-30m band; Otero et al. 2005: exploited from 5-7m to a maximum of 150m"
+      },
+      "season": {
+        "peakMonths": [
+          3,
+          4,
+          5,
+          6
+        ],
+        "closedMonths": [],
+        "conf": "cited",
+        "src": "Garofalo et al. 2010 (ICES J Mar Sci, Strait of Sicily): peak spawning in spring/summer with peak recruitment in autumn; FAO: Mediterranean spawning March-October, peaking spring to early summer"
+      },
+      "weights": {
+        "depth": 0.35,
+        "sst": 0.25,
+        "chl": 0.2,
+        "solunar": 0.15,
+        "wind": 0.05
+      },
+      "unscorableRequirements": [
+        "Hard bottom substrate: Guerra et al. 2015 record a \"noteworthy preference for spawning in areas with hard bottom substrate\", with dens in crevices (Hanlon & Messenger 1996; Mangold 1983). This is the single strongest predictor of spawning dens and there is no bottom-type source, so a high spawning PFZ does NOT mean suitable ground was found. It is named rather than dropped because this gap is what decides the outcome.",
+        "Surface dissolved oxygen: Guerra et al. 2015 report occurrence varying with bottom temperature, bottom substrate, surface DO, surface CHL-a and coarse sediment. DO has no data source here.",
+        "Site fidelity: Mereu et al. 2015 report recapture within 1 km in 84-86 % of cases. Not scorable, but it means a spawning \"zone\" for this species is a site rather than a drifting patch - roughly a 1 km radius, not a 20 km polygon, which constrains the later GPX work."
+      ],
+      "note": "A cephalopod whose documented spawning behaviour is the OPPOSITE of where the fish are. v1 scored octopus on one depth band and no temperature at all, which is a statement about being in the water column rather than about octopus. The two modes are deliberately different: spawning compresses to 2-40 m with a spring-summer season, foraging runs 5-200 m year-round. The chlorophyll band is declared as a band, not a monotonic curve, because the source relationship is genuinely non-monotonic.",
+      "modes": [
+        {
+          "id": "foraging",
+          "label": "Foraging / exploited",
+          "isDefault": true,
+          "depth": {
+            "gateMinM": 5,
+            "gateMaxM": 200,
+            "prefMinM": 20,
+            "prefMaxM": 50,
+            "conf": "cited",
+            "src": "Guerra et al. 2015 review: fished 20-200 m in the NE Atlantic and Mediterranean; Mereu et al. 2015 (mark-recapture, 1604 specimens, Sardinia) gives 20-50 m for the trap fishery; Dridi et al. 2023 (six-year GAM, southern Morocco) gives 18-111 m with a 40-60 m juvenile peak"
+          },
+          "sstC": {
+            "gateMin": 14.0,
+            "gateMax": 27.0,
+            "idealMin": 18.0,
+            "idealMax": 23.0,
+            "conf": "expert",
+            "src": "Dridi et al. 2023: highest juvenile abundance at SST 20.7-21C. That is a juvenile-recruitment GAM, not an adult thermal envelope, so this band is EXPERT and is centred on the paper's optimum rather than citing a range it never states"
+          },
+          "chlMgM3": {
+            "gateMin": 0.0,
+            "gateMax": 8.0,
+            "idealMin": 2.0,
+            "idealMax": 6.0,
+            "conf": "cited",
+            "src": "Dridi et al. 2023, autumn GAM: NON-MONOTONIC relationship with chlorophyll - negative below 2.5 mg/m3, positive above. A band is the closest honest shape to that U, and it is declared as a band rather than smoothed into a monotonic curve"
+          },
+          "weights": {
+            "depth": 0.35,
+            "sst": 0.25,
+            "chl": 0.2,
+            "solunar": 0.15,
+            "wind": 0.05
+          },
+          "requiredFactors": [
+            "depth",
+            "sst"
+          ],
+          "conf": "expert",
+          "src": "Dridi et al. 2023; Mereu et al. 2015; Guerra et al. 2015"
+        },
+        {
+          "id": "spawning",
+          "label": "Spawning / den habitat",
+          "depth": {
+            "gateMinM": 2,
+            "gateMaxM": 40,
+            "prefMinM": 5,
+            "prefMaxM": 20,
+            "conf": "cited",
+            "src": "Guerra et al. 2015, Prog. Oceanogr. 129:36-47 (93 visual censuses, 123.69 ha, Cies Islands): spawning at ~20 m with protection proposed for the 5-30 m band. Spawning depth is NOT the foraging depth - v1 used one band for both"
+          },
+          "sstC": {
+            "gateMin": 14.0,
+            "gateMax": 27.0,
+            "idealMin": 18.0,
+            "idealMax": 23.0,
+            "conf": "expert",
+            "src": "As foraging. No spawning-specific thermal envelope is published for this species, so the band is carried over and marked EXPERT rather than invented separately"
+          },
+          "season": {
+            "peakMonths": [
+              3,
+              4,
+              5,
+              6,
+              7,
+              8
+            ],
+            "closedMonths": [],
+            "conf": "cited",
+            "src": "Garofalo et al. 2010 (ICES J. Mar. Sci. 67:1363-1371, Strait of Sicily 1994-2008): spawning March-October, peaking spring to early summer, with recruitment in autumn"
+          },
+          "weights": {
+            "depth": 0.4,
+            "sst": 0.2,
+            "season": 0.25,
+            "solunar": 0.1,
+            "wind": 0.05
+          },
+          "requiredFactors": [
+            "depth",
+            "sst"
+          ],
+          "conf": "cited",
+          "src": "Guerra et al. 2015; Garofalo et al. 2010"
+        }
+      ],
+      "requiredFactors": [
+        "depth",
+        "sst"
+      ],
+      "evidence": [
+        {
+          "key": "guerra2015",
+          "citation": "Guerra et al. 2015, Prog. Oceanogr. 129:36-47 - 93 visual censuses, Cies Islands",
+          "usedFor": "spawning depth ~20 m, 5-30 m protect band, hard-substrate preference, 20-200 m range"
+        },
+        {
+          "key": "mereu2015",
+          "citation": "Mereu et al. 2015, mark-recapture, 1604 specimens, Sardinia",
+          "usedFor": "20-50 m trap-fishery depth and <1 km site fidelity"
+        },
+        {
+          "key": "dridi2023",
+          "citation": "Dridi et al. 2023, six-year GAM, southern Morocco",
+          "usedFor": "juvenile depth 18-111 m, SST optimum ~21C, non-monotonic CHL response"
+        },
+        {
+          "key": "garofalo2010",
+          "citation": "Garofalo et al. 2010, ICES J. Mar. Sci. 67:1363-1371, Strait of Sicily 1994-2008",
+          "usedFor": "spawning season and the SST-at-hatching recruitment link"
+        }
+      ]
     },
     {
       "id": "common_cuttlefish",
       "commonName": "Common Cuttlefish",
       "scientificName": "Sepia officinalis",
-      "aliases": ["cuttlefish", "sepia", "seiche"],
+      "aliases": [
+        "cuttlefish",
+        "sepia",
+        "seiche"
+      ],
       "guild": "cephalopod",
-      "depth": { "gateMinM": 0, "gateMaxM": 150, "prefMinM": 0, "prefMaxM": 100, "conf": "cited", "src": "Eriksen et al. 2015 (FAO, Cephalopod biology and fisheries in Europe II): subtidal to 200m but most abundant in the upper 100m; shell implosion at 150-200m limits large animals. Guerra et al. 2015: preferential spawning depth 8-13m" },
-      "sstC": { "gateMin": 10.0, "gateMax": 30.0, "idealMin": 15.0, "idealMax": 25.0, "conf": "cited", "src": "Eriksen et al. 2015 (FAO): temperature limits 10-30C; below 10C the animal is inactive, stops feeding and dies within days (Richard 1971, Bettencourt 2000). Unlike the demersal fishes, this range genuinely describes the water the animal occupies, because cuttlefish are shallow-water and benthic within the photic zone" },
-      "season": { "peakMonths": [3, 4, 5, 6], "closedMonths": [], "conf": "cited", "src": "Eriksen et al. 2015 (FAO): semi-continuous Mediterranean spawning with a March-June peak; Turkish coast Feb-Jun and Adriatic intensification Apr-Aug also reported. Inshore migration to spawn in spring/summer, offshore to feed in autumn/winter" },
-      "weights": { "sst": 0.25, "depth": 0.20, "wind": 0.15, "swell": 0.15, "solunar": 0.15, "season": 0.10 },
+      "depth": {
+        "gateMinM": 0,
+        "gateMaxM": 150,
+        "prefMinM": 0,
+        "prefMaxM": 100,
+        "conf": "cited",
+        "src": "Eriksen et al. 2015 (FAO, Cephalopod biology and fisheries in Europe II): subtidal to 200m but most abundant in the upper 100m; shell implosion at 150-200m limits large animals. Guerra et al. 2015: preferential spawning depth 8-13m"
+      },
+      "sstC": {
+        "gateMin": 10.0,
+        "gateMax": 30.0,
+        "idealMin": 15.0,
+        "idealMax": 25.0,
+        "conf": "cited",
+        "src": "Eriksen et al. 2015 (FAO): temperature limits 10-30C; below 10C the animal is inactive, stops feeding and dies within days (Richard 1971, Bettencourt 2000). Unlike the demersal fishes, this range genuinely describes the water the animal occupies, because cuttlefish are shallow-water and benthic within the photic zone"
+      },
+      "season": {
+        "peakMonths": [
+          3,
+          4,
+          5,
+          6
+        ],
+        "closedMonths": [],
+        "conf": "cited",
+        "src": "Eriksen et al. 2015 (FAO): semi-continuous Mediterranean spawning with a March-June peak; Turkish coast Feb-Jun and Adriatic intensification Apr-Aug also reported. Inshore migration to spawn in spring/summer, offshore to feed in autumn/winter"
+      },
+      "weights": {
+        "sst": 0.25,
+        "depth": 0.2,
+        "wind": 0.15,
+        "swell": 0.15,
+        "solunar": 0.15,
+        "season": 0.1
+      },
       "unscorableRequirements": [
         "Spawning substrate and egg-laying habitat",
         "Cuttlebone/egg deposition site quality"
@@ -305,21 +1260,114 @@
       "id": "deep_rose_shrimp",
       "commonName": "Deep Rose Shrimp",
       "scientificName": "Parapenaeus longirostris",
-      "aliases": ["gamba"],
+      "aliases": [
+        "gamba"
+      ],
       "guild": "deep_crustacean",
-      "depth": { "gateMinM": 400, "gateMaxM": 1000, "prefMinM": 450, "prefMaxM": 800, "conf": "expert" },
-      "weights": { "sst": 0.20, "depth": 0.40, "wind": 0.10, "swell": 0.15, "solunar": 0.15 },
+      "depth": {
+        "gateMinM": 400,
+        "gateMaxM": 1000,
+        "prefMinM": 450,
+        "prefMaxM": 800,
+        "conf": "expert"
+      },
+      "weights": {
+        "sst": 0.2,
+        "depth": 0.4,
+        "wind": 0.1,
+        "swell": 0.15,
+        "solunar": 0.15
+      },
       "note": "DEPTH-BLOCKED at every existing Mediterranean spot (all 72 are 15-30m). Returns unavailable until deep/offshore spots exist. This is intended behaviour, not a bug."
     },
     {
       "id": "red_shrimp",
       "commonName": "Red Shrimp",
-      "scientificName": "Aristeomorpha foliacea",
-      "aliases": [],
+      "scientificName": "Aristeomorpha foliacea / Plesiopenaeus longirostris",
+      "aliases": [
+        "redshrimp",
+        "gamba",
+        "aristeeomorpha"
+      ],
       "guild": "deep_crustacean",
-      "depth": { "gateMinM": 300, "gateMaxM": 700, "prefMinM": 400, "prefMaxM": 600, "conf": "expert" },
-      "weights": { "sst": 0.20, "depth": 0.40, "wind": 0.10, "swell": 0.15, "solunar": 0.15 },
-      "note": "DEPTH-BLOCKED at every existing Mediterranean spot (all 72 are 15-30m). Returns unavailable until deep/offshore spots exist."
+      "depth": {
+        "gateMinM": 120,
+        "gateMaxM": 1300,
+        "prefMinM": 300,
+        "prefMaxM": 800,
+        "conf": "cited",
+        "src": "Fiorentino et al. 2013 (FAO MedSudMed): full range 120-1300 m, deep-water benthopelagic on muddy bottoms, basin-wide peaks 300-800 m (Ragonese et al. 1997; Politou et al. 2004). The gate is the documented full range and not the peak, so the species is not switched off across water it demonstrably occupies"
+      },
+      "weights": {
+        "depth": 0.35,
+        "bottom_temp": 0.3,
+        "bottom_salinity": 0.2,
+        "mld": 0.05,
+        "wind": 0.1
+      },
+      "note": "The strongest argument for geographic regions in the whole package. A 13.6-13.8C bottom band and a 38.1-38.5 psu bottom band describe Levantine Intermediate Water, which exists as a water mass only in the central and eastern Mediterranean. Scored basin-wide, the band would grade a Ligurian or Catalan slope as prime red shrimp ground on temperature alone - a confident, wrong, expensive answer. The documented ABSENCE is therefore encoded as a region gate, and the Maghreb is gated too because no distribution record exists for it. Separately, every spot in the current inventory is a nominal 20-30 m coastal site, so this profile is depth-gated at all of them regardless of region.",
+      "bottomTempC": {
+        "gateMin": 13.0,
+        "gateMax": 14.5,
+        "idealMin": 13.6,
+        "idealMax": 13.8,
+        "conf": "cited",
+        "src": "Maiorano et al. 2020, Adv. Oceanogr. Limnol. 2020:9471 (MEDITS 2009-2014 + GAM, Sardinia): 13.6-13.8C, with a basin-wide preference of ~13C (Ghidalia & Bourgois 1961; Yahiaoui 1994; Politou et al. 2004). The gate is widened to 13.0-14.5 around the cited optimum because a 0.2C-wide gate would report the species absent from water it demonstrably occupies"
+      },
+      "bottomSalinityPsu": {
+        "gateMin": 37.5,
+        "gateMax": 39.0,
+        "idealMin": 38.1,
+        "idealMax": 38.5,
+        "conf": "cited",
+        "src": "Maiorano et al. 2020: 38.1-38.5 psu, tightly coupled to Levantine Intermediate Water. Widened to 37.5-39.0 for the same reason as the thermal band. Measured live: 38.51-38.60 psu off the Balearic abyssal plain, above the cited optimum, which is consistent with that being Ligurian water rather than LIW and with the region gate below"
+      },
+      "mldM": {
+        "gateMin": 0.0,
+        "gateMax": 2000.0,
+        "preference": "lower_better",
+        "conf": "expert",
+        "src": "A benthopelagic living at 400-600 m is necessarily below the seasonal mixed layer in summer, so a thin one is mildly favourable. No citation states a threshold: the direction is defensible, the 2000 m ceiling is this app's cap, and the factor carries 0.05 weight"
+      },
+      "requiredFactors": [
+        "depth",
+        "bottom_temp",
+        "bottom_salinity"
+      ],
+      "byRegion": {
+        "western_med": {
+          "unavailable": "Red shrimp do not occur in the Ligurian, Catalan or Balearic seas. Ragonese & Bianchini 1995 and Papaconstantinou & Kapiris 2003 record the species from Sardinia, the north/central Tyrrhenian, the Strait of Sicily, the Ionian and Malta, and its ABSENCE from the Ligurian, Catalan and Balearic basins. The documented 13.6-13.8C / 38.1-38.5 psu band describes Levantine Intermediate Water, a water mass that is not formed in these sub-basins, so local measurements here are in-band at best by accident. This is absence rather than a low score: no measurement could make this a red shrimp zone."
+        },
+        "maghreb": {
+          "unavailable": "No red shrimp distribution record exists for the Maghreb shelf in the sources behind this profile. The species is documented from the central and eastern Mediterranean only, and rather than assume that silence means abundance, this region is reported as unavailable pending a citation."
+        }
+      },
+      "unscorableRequirements": [
+        "Bottom substrate: the FAO 2020 Aristeidae catalogue and Fischer et al. 1987 record the species on mud and soft mud. There is no bottom-type source, so a rocky slope at the right temperature and salinity would score identically to a muddy one.",
+        "Diel behaviour: ascends to shallower depths at night, especially in winter (Cau & Deiana 1982; Kapiris et al. 2010). Not a habitat gate, but it means a score is a 24-hour statement about a species that is not in the same place at night."
+      ],
+      "evidence": [
+        {
+          "key": "maiorano2020",
+          "citation": "Maiorano et al. 2020, Adv. Oceanogr. Limnol. 2020:9471 - MEDITS 2009-2014 + GAM, Sardinia",
+          "usedFor": "bottom temperature 13.6-13.8C, bottom salinity 38.1-38.5 psu, 400-600 m peak depth"
+        },
+        {
+          "key": "fiorentino2013",
+          "citation": "Fiorentino et al. 2013, FAO MedSudMed - Aristeidae, Mediterranean",
+          "usedFor": "120-1300 m full range, 300-800 m basin peak, muddy substrate"
+        },
+        {
+          "key": "ragonese1995",
+          "citation": "Ragonese & Bianchini 1995; Papaconstantinou & Kapiris 2003 via Maiorano 2020",
+          "usedFor": "present and absent distribution, which becomes the western and Maghreb region gates"
+        },
+        {
+          "key": "bianchini1999",
+          "citation": "Bianchini 1999 via Fiorentino et al. 2013 - Pantelleria Channel",
+          "usedFor": "consistently found only below 600 m"
+        }
+      ]
     }
   ]
 }

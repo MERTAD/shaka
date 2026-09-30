@@ -146,11 +146,113 @@ object PfzFactor {
     const val SOLUNAR = "solunar"
     const val SEASON = "season"
 
+    // v2 factors. All of these are real measurements from the Copernicus physics
+    // products (see CopernicusField); the benthic ones are what the hake and
+    // red shrimp profiles are actually written against.
+
+    /** Potential temperature at the sea floor, °C. Copernicus `bottomT`. */
+    const val BOTTOM_TEMP = "bottom_temp"
+
+    /** Practical salinity at the sea floor, psu. Copernicus `so`, deepest level. */
+    const val BOTTOM_SALINITY = "bottom_salinity"
+
+    /** Current speed at the sea floor, m/s. Copernicus `uo`/`vo`, deepest level. */
+    const val BOTTOM_CURRENT = "bottom_current"
+
+    /** Mixed layer thickness, m. Copernicus `mlotst`. */
+    const val MLD = "mld"
+
+    /**
+     * Sea surface height anomaly, m — DERIVED as daily `zos` minus the monthly
+     * mean `zos` of the same product. The static dataset carries no `mdt`, so
+     * absolute dynamic topography is not available and this is our arithmetic
+     * over two real model fields, not a published value.
+     */
+    const val SSH_ANOMALY = "ssh_anomaly"
+
+    /** 30-day change in sea surface temperature, °C. Derived from the SST series. */
+    const val SST_WARMING = "sst_warming"
+
     val ALL = listOf(
         SST, CHL, CHLA_GRADIENT, SST_GRADIENT, SST_ANOMALY,
-        DEPTH, DEPTH_GRADIENT, WIND, SWELL, CURRENT, SOLUNAR, SEASON
+        DEPTH, DEPTH_GRADIENT, WIND, SWELL, CURRENT, SOLUNAR, SEASON,
+        BOTTOM_TEMP, BOTTOM_SALINITY, BOTTOM_CURRENT, MLD, SSH_ANOMALY, SST_WARMING
     )
 }
+
+/**
+ * One behavioural mode of a species, optionally split by size class.
+ *
+ * Bluefin is the reason this exists: Druon et al. (2016) fit *separate*
+ * parameterisations for feeding and for spawning, and separate thermal envelopes
+ * for small (<=25 kg) and large (>25 kg) fish. Collapsing that into one band set
+ * is what made the v1 bluefin profile claim to represent "the species" while
+ * actually holding the large-fish feeding numbers.
+ */
+@Serializable
+data class ModeSpec(
+    val id: String,
+    val label: String,
+    /** The mode used when a caller does not pass `?mode=`. */
+    val isDefault: Boolean = false,
+    /** Size classes this mode is parameterised for, e.g. ["small", "large"]. */
+    val sizeClasses: List<String> = emptyList(),
+    /** Used when a caller does not pass `?sizeClass=`. Null when unsplit. */
+    val defaultSizeClass: String? = null,
+    val sstC: BandSpec? = null,
+    val chlMgM3: BandSpec? = null,
+    val sshAnomalyM: BandSpec? = null,
+    val sstWarmingC: BandSpec? = null,
+    val depth: DepthSpec? = null,
+    val season: SeasonSpec? = null,
+    /** Replaces the base weights entirely when non-empty. */
+    val weights: Map<String, Double> = emptyMap(),
+    /** Replaces the base required factors entirely when non-empty. */
+    val requiredFactors: List<String> = emptyList(),
+    val conf: FactorConfidence = FactorConfidence.UNKNOWN,
+    val src: String? = null
+)
+
+/**
+ * A geographic override for one macro-region (see [PfzRegions]).
+ *
+ * [unavailable] is a hard exclusion with a stated reason, and is the single most
+ * important field here. Red shrimp are absent from the Ligurian, Catalan and
+ * Balearic seas (Ragonese & Bianchini 1995; Papaconstantinou & Kapiris 2003) yet
+ * their documented band is 13.6-13.8 °C of bottom temperature — which describes
+ * Levantine Intermediate Water, a water mass that simply is not present in those
+ * sub-basins. Scored basin-wide, the band would grade a Catalan slope as prime
+ * red shrimp ground. The absence has to be a gate, not a note.
+ */
+@Serializable
+data class RegionOverride(
+    val unavailable: String? = null,
+    val sstC: BandSpec? = null,
+    val chlMgM3: BandSpec? = null,
+    val bottomTempC: BandSpec? = null,
+    val bottomSalinityPsu: BandSpec? = null,
+    val bottomCurrentMs: BandSpec? = null,
+    val depth: DepthSpec? = null,
+    val season: SeasonSpec? = null,
+    val weights: Map<String, Double> = emptyMap(),
+    val requiredFactors: List<String> = emptyList(),
+    val note: String? = null
+)
+
+/**
+ * A single published source behind one or more numbers in a profile.
+ *
+ * Surfaced in the API response so a caller can see *why* a band is what it is
+ * without having to read the JSON, and so an EXPERT band is visibly the odd one
+ * out rather than sitting silently beside a citation.
+ */
+@Serializable
+data class EvidenceRef(
+    val key: String,
+    val citation: String,
+    /** What this source was used for, e.g. "bottom temperature band". */
+    val usedFor: String
+)
 
 /**
  * A single species' habitat definition.
@@ -193,6 +295,66 @@ data class SpeciesProfile(
     val oceanCurrentKmhMax: Double? = null,
     val season: SeasonSpec? = null,
     val weights: Map<String, Double>,
+
+    // ------------------------------------------------------------- v2 factors
+
+    /**
+     * Bottom potential temperature, °C. Copernicus `bottomT` (2D, already °C).
+     * This is Colloca et al.'s SBT, the term that makes the hake profile a hake
+     * profile rather than an SST lookup.
+     */
+    val bottomTempC: BandSpec? = null,
+
+    /** Bottom practical salinity, psu. Copernicus `so`, deepest valid level. */
+    val bottomSalinityPsu: BandSpec? = null,
+
+    /** Bottom current speed, m/s. Copernicus `uo`/`vo`, deepest valid level. */
+    val bottomCurrentMs: BandSpec? = null,
+
+    /** Mixed layer thickness, m. Copernicus `mlotst`. */
+    val mldM: BandSpec? = null,
+
+    /**
+     * Sea surface height anomaly, m — derived, not published. The SSH family's
+     * static dataset has no `mdt`, so this is `zos_daily - zos_monthly_mean`
+     * from the same product.
+     */
+    val sshAnomalyM: BandSpec? = null,
+
+    /** 30-day change in SST, °C. Druon et al.'s ΔSST30, derived from the SST series. */
+    val sstWarmingC: BandSpec? = null,
+
+    // ------------------------------------------------------------------- v2 shape
+
+    /**
+     * Behavioural modes (feeding / spawning, …) with optional size-class splits.
+     * Empty for the 22 species not yet migrated, which score exactly as in v1.
+     */
+    val modes: List<ModeSpec> = emptyList(),
+
+    /**
+     * Geographic overrides keyed by macro-region (see [PfzRegions]). Generalises
+     * [sstCByRegion] from a single SST field to every band, and can hard-exclude
+     * a region with [RegionOverride.unavailable].
+     */
+    val byRegion: Map<String, RegionOverride> = emptyMap(),
+
+    /**
+     * Factors that must resolve for this species to be scoreable at all.
+     *
+     * If any of them is missing, the result is [PfzStatus.INSUFFICIENT_DATA] with
+     * a null score — never a renormalized score over what happened to arrive.
+     *
+     * This exists because Colloca et al. (2014) fit hake habitat as a
+     * *product*: any one term at zero makes the cell zero. A 70/100 built from
+     * depth and chlorophyll while bottom temperature was unknown is not a
+     * partial hake score, it is a different model wearing the hake's name.
+     */
+    val requiredFactors: List<String> = emptyList(),
+
+    /** Published sources behind the numbers in this profile. */
+    val evidence: List<EvidenceRef> = emptyList(),
+
     /**
      * Habitat requirements the app has no data source for, so they cannot be
      * scored. Kept visible in the response rather than silently dropped.
@@ -235,6 +397,156 @@ data class SpeciesProfile(
         PfzFactor.CURRENT -> oceanCurrentKmhMax != null
         PfzFactor.SOLUNAR -> true
         PfzFactor.SEASON -> season != null && season.peakMonths.isNotEmpty()
+        // v2: each of these is a real, individually-resolvable measurement, so
+        // the factor is always evaluable. That is deliberate — it means a
+        // species that genuinely weights bottom temperature reports the data gap
+        // instead of quietly losing the weight budget and inflating the rest.
+        PfzFactor.BOTTOM_TEMP -> bottomTempC != null
+        PfzFactor.BOTTOM_SALINITY -> bottomSalinityPsu != null
+        PfzFactor.BOTTOM_CURRENT -> bottomCurrentMs != null
+        PfzFactor.MLD -> mldM != null
+        PfzFactor.SSH_ANOMALY -> sshAnomalyM != null
+        PfzFactor.SST_WARMING -> sstWarmingC != null
+        else -> false
+    }
+
+    /** The mode used when a caller passes no `?mode=`. */
+    fun defaultMode(): ModeSpec? = modes.firstOrNull { it.isDefault } ?: modes.firstOrNull()
+
+    fun modeById(id: String): ModeSpec? = modes.firstOrNull { it.id == id }
+
+    /**
+     * Flatten this profile's mode / size-class / region overrides into one flat,
+     * engine-facing set of bands and weights.
+     *
+     * Precedence, highest first: **mode > region > base**. A mode override wins
+     * because a behavioural parameterisation is a different model, not a
+     * different location — and the two rarely collide in practice (bluefin
+     * spawning season varies by basin, its thermal band by behaviour).
+     *
+     * `region` falls back through [byRegion] and then the older [sstCByRegion],
+     * so the 22 not-yet-migrated species keep their existing region behaviour.
+     */
+    fun resolve(mode: String? = null, sizeClass: String? = null, region: String? = null): ResolvedProfile {
+        val chosen = (mode?.let { modeById(it) }) ?: defaultMode()
+        val effectiveSize = sizeClass ?: chosen?.defaultSizeClass
+        val regionOverride = region?.let { byRegion[it] }
+
+        fun <T : Any> pick(base: T?, regionValue: T?, modeValue: T?): T? = modeValue ?: regionValue ?: base
+
+        val weights = when {
+            !chosen?.weights.isNullOrEmpty() -> chosen!!.weights
+            !regionOverride?.weights.isNullOrEmpty() -> regionOverride!!.weights
+            else -> weights
+        }
+        val required = when {
+            !chosen?.requiredFactors.isNullOrEmpty() -> chosen!!.requiredFactors
+            !regionOverride?.requiredFactors.isNullOrEmpty() -> regionOverride!!.requiredFactors
+            else -> requiredFactors
+        }
+
+        return ResolvedProfile(
+            profile = this,
+            modeSpec = chosen,
+            mode = chosen?.id,
+            sizeClass = effectiveSize,
+            region = region,
+            regionExclusion = regionOverride?.unavailable?.let { region to it },
+            depth = pick(depth, regionOverride?.depth, chosen?.depth) ?: depth,
+            sstC = pick(sstC, regionOverride?.sstC ?: sstCByRegion[region], chosen?.sstC),
+            chlMgM3 = pick(chlMgM3, regionOverride?.chlMgM3, chosen?.chlMgM3),
+            bottomTempC = pick(bottomTempC, regionOverride?.bottomTempC, null),
+            bottomSalinityPsu = pick(bottomSalinityPsu, regionOverride?.bottomSalinityPsu, null),
+            bottomCurrentMs = pick(bottomCurrentMs, regionOverride?.bottomCurrentMs, null),
+            mldM = mldM,
+            sshAnomalyM = pick(sshAnomalyM, null, chosen?.sshAnomalyM),
+            sstWarmingC = pick(sstWarmingC, null, chosen?.sstWarmingC),
+            season = pick(season, regionOverride?.season, chosen?.season),
+            windKmhMax = windKmhMax,
+            swellMMax = swellMMax,
+            oceanCurrentKmhMax = oceanCurrentKmhMax,
+            weights = weights,
+            requiredFactors = required
+        )
+    }
+}
+
+/**
+ * A [SpeciesProfile] with every mode / size-class / region override already
+ * applied. The engine consumes only this, so it never has to know that a
+ * profile is nested.
+ */
+data class ResolvedProfile(
+    val profile: SpeciesProfile,
+    /** The [ModeSpec] that was applied, or null when the species declares none. */
+    val modeSpec: ModeSpec?,
+    /** The mode actually applied, or null when the species declares none. */
+    val mode: String?,
+    val sizeClass: String?,
+    val region: String?,
+    /** Set when the species does not occur in this region at all. */
+    /**
+     * Set when the species does not occur in this region at all: the region slug
+     * paired with the reason, so a refusal can be matched against a map and the
+     * caller never has to parse prose to find out where it applies.
+     */
+    val regionExclusion: Pair<String, String>?,
+    val depth: DepthSpec,
+    val sstC: BandSpec?,
+    val chlMgM3: BandSpec?,
+    val bottomTempC: BandSpec?,
+    val bottomSalinityPsu: BandSpec?,
+    val bottomCurrentMs: BandSpec?,
+    val mldM: BandSpec?,
+    val sshAnomalyM: BandSpec?,
+    val sstWarmingC: BandSpec?,
+    val season: SeasonSpec?,
+    val windKmhMax: Double?,
+    val swellMMax: Double?,
+    /** Surface-current operational limit, km/h. Distinct from [bottomCurrentMs]. */
+    val oceanCurrentKmhMax: Double?,
+    val weights: Map<String, Double>,
+    val requiredFactors: List<String>
+) {
+    /** Weights for factors this resolution actually defines, renormalized to 1. */
+    fun normalizedWeights(): Map<String, Double> {
+        val defined = weights.filter { (factor, w) -> w > 0.0 && definesFactor(factor) }
+        val total = defined.values.sum()
+        if (total <= 0.0) return emptyMap()
+        return defined.mapValues { (_, w) -> w / total }
+    }
+
+    /**
+     * Whether this species has a real requirement for [factor].
+     *
+     * The engine evaluates and reports only what is defined here. That keeps
+     * `missingFactors` meaningful: `bottom_temp` appears for a hake whose band
+     * we could not fill, and does not appear for a sardine that has no bottom
+     * temperature requirement at all. Reporting an undeclared band as "missing
+     * data" would tell the caller we are blind to something that was never part
+     * of the question.
+     *
+     * Spatial gradients, wind, swell, solunar and depth are always evaluable:
+     * they are either real measurements of the conditions the app models, or a
+     * shared operational envelope, so a species that genuinely weights one
+     * reports its data gap instead of quietly losing the weight budget.
+     */
+    fun definesFactor(factor: String): Boolean = when (factor) {
+        PfzFactor.SST -> sstC != null
+        PfzFactor.CHL -> chlMgM3 != null
+        // Always evaluable, exactly as in v1: a species that genuinely weights a
+        // spatial gradient must report the data gap rather than lose the weight.
+        PfzFactor.CHLA_GRADIENT, PfzFactor.SST_GRADIENT, PfzFactor.SST_ANOMALY,
+        PfzFactor.DEPTH, PfzFactor.DEPTH_GRADIENT,
+        PfzFactor.SOLUNAR, PfzFactor.WIND, PfzFactor.SWELL -> true
+        PfzFactor.CURRENT -> oceanCurrentKmhMax != null
+        PfzFactor.BOTTOM_TEMP -> bottomTempC != null
+        PfzFactor.BOTTOM_SALINITY -> bottomSalinityPsu != null
+        PfzFactor.BOTTOM_CURRENT -> bottomCurrentMs != null
+        PfzFactor.MLD -> mldM != null
+        PfzFactor.SSH_ANOMALY -> sshAnomalyM != null
+        PfzFactor.SST_WARMING -> sstWarmingC != null
+        PfzFactor.SEASON -> season != null && season.peakMonths.isNotEmpty()
         else -> false
     }
 }
@@ -267,6 +579,55 @@ data class PfzObservation(
     val depthSource: String? = null,
     val waterTempC: Double? = null,
     val chlorophyllMgM3: Double? = null,
+
+    // ---- v2 benthic and mesoscale factors. All real measurements; null is
+    // UNKNOWN and is reported as a named missing factor, never defaulted.
+
+    /**
+     * Potential temperature at the sea floor, °C, from Copernicus `bottomT`.
+     *
+     * This is the measurement the hake profile is built on (Colloca et al. 2014
+     * give a 11.8-15.0 °C 5-95 percentile band for Mediterranean recruits) and
+     * the first one red shrimp are known to track (Maiorano et al. 2020).
+     */
+    val bottomTempC: Double? = null,
+
+    /**
+     * Practical salinity at the sea floor, psu, from the deepest non-masked
+     * level of Copernicus `so`. Measured 38.5-38.6 psu live off the Balearic
+     * abyssal plain, which is the Levantine Intermediate Water that red shrimp
+     * are coupled to.
+     */
+    val bottomSalinityPsu: Double? = null,
+
+    /**
+     * Current speed at the sea floor, m/s, from the deepest non-masked level of
+     * Copernicus `uo`/`vo`.
+     *
+     * Deliberately in m/s, matching Colloca et al.'s 0.034 m/s condition. The
+     * v1 profile had an `oceanCurrentKmhMax` in km/h for an unrelated surface
+     * current; keeping the two apart prevents a unit slip turning a passing cell
+     * into a gated one.
+     */
+    val bottomCurrentMs: Double? = null,
+
+    /** Mixed layer thickness, m, from Copernicus `mlotst`. */
+    val mldM: Double? = null,
+
+    /**
+     * Sea surface height anomaly, m — DERIVED as daily `zos` minus the monthly
+     * mean `zos` of the same Copernicus product, because that product's static
+     * dataset publishes no `mdt`.
+     *
+     * Measured live: 18 mm of spread across a 9 km box but 276 mm across a
+     * 5x8 degree one. It is therefore an absolute regional gate, and zone
+     * analysis needs a wider window than the usual 0.3 degree box for it to vary
+     * between zones at all.
+     */
+    val sshAnomalyM: Double? = null,
+
+    /** 30-day change in sea surface temperature, °C (Druon et al.'s ΔSST30). */
+    val sstWarmingC: Double? = null,
     /**
      * Chlorophyll-a spatial gradient. This is the actual documented driver for
      * bluefin feeding habitat (Druon et al. 2011). When the Copernicus gap-free
@@ -363,6 +724,19 @@ data class PfzSpeciesResult(
     val pfz: Int? = null,
     /** 0-100. Reduced by missing data, low-confidence factors and forecast distance. */
     val confidence: Int = 0,
+    /**
+     * Behavioural mode actually applied, e.g. `feeding` or `spawning`.
+     *
+     * Disclosed because a bluefin feeding score and a bluefin spawning score are
+     * different models against different thermal envelopes (Druon et al. 2016),
+     * and a caller that cannot see which one it received cannot interpret the
+     * number. Null when the species declares no modes.
+     */
+    val mode: String? = null,
+    /** Size class the applied mode was parameterised for, when it is split. */
+    val sizeClass: String? = null,
+    /** Macro-basin used for geographic overrides, when one was resolved. */
+    val region: String? = null,
     val factors: List<FactorScore> = emptyList(),
     /** Factors that pushed the score up, most important first. */
     val drivers: List<String> = emptyList(),
@@ -380,7 +754,17 @@ data class PfzSpeciesResult(
      * is told the score is blind to something that may well decide the outcome
      * (e.g. common octopus spawning on hard bottom, which the app cannot see).
      */
-    val unscorableRequirements: List<String> = emptyList()
+    val unscorableRequirements: List<String> = emptyList(),
+    /**
+     * Species-level caveat that the caller must see next to the number, such as
+     * "no Maghreb band is cited, so the basin-wide band is being applied here"
+     * for sardine.
+     *
+     * This travels per species rather than in the response-wide coverage notes
+     * because it changes with the applied mode and region: the same species
+     * needs no such caveat in one basin and an urgent one in another.
+     */
+    val note: String? = null
 )
 
 /** Full response body for `GET /v1/spots/{id}/pfz`. */
@@ -442,6 +826,18 @@ data class PfzZone(
     val sstAnomalyC: Double? = null,
     /** Single-point bathymetric depth at the zone centre, metres. */
     val depthM: Double? = null,
+    /**
+     * The model that produced this number: the behavioural mode and size class
+     * that were applied, and the macro-region this zone resolved to.
+     *
+     * The same request can be run twice for two modes of one species, and the
+     * scores differ — near-inverted for bluefin feeding versus spawning. A zone
+     * score without its applied context is therefore not reproducible, and the
+     * region is what decides whether the score is possible at all.
+     */
+    val mode: String? = null,
+    val sizeClass: String? = null,
+    val region: String? = null,
     val drivers: List<String> = emptyList(),
     val blockers: List<String> = emptyList(),
     val missingFactors: List<String> = emptyList(),
