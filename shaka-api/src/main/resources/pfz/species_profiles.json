@@ -229,7 +229,7 @@
         "prefMaxM": 30,
         "scope": "water_column",
         "conf": "expert",
-        "src": "oceanic scombrid living in the upper water column; seafloor depth is not a constraint"
+        "src": "Oceanic scombrid living in the upper water column; seafloor depth is not a constraint. water_column scope means bathymetry must never gate or score this species"
       },
       "sstC": {
         "gateMin": 15.0,
@@ -237,18 +237,25 @@
         "idealMin": 20.0,
         "idealMax": 26.0,
         "conf": "expert",
-        "src": "standard warm-water scombrid range; not traced to a specific Mediterranean citation"
+        "src": "Warm-water scombrid range. The existing profile already recorded this as 'not traced to a specific Mediterranean citation' and that remains true; no fabricated source has been attached to it"
       },
       "windKmhMax": 25,
       "swellMMax": 1.2,
       "weights": {
-        "sst": 0.3,
-        "depth": 0.2,
+        "sst": 0.4,
         "wind": 0.2,
         "swell": 0.15,
-        "solunar": 0.15
+        "solunar": 0.25
       },
-      "note": "PFZ treats the common Spanish/Maghrebi name 'bonito' as this species. The global SpeciesNormalizer keeps bonito separate for the SoCal pipeline; the two vocabularies are intentionally not merged."
+      "note": "v1 carried depth at 0.2 weight while ALSO declaring water_column scope. Since water_column species are excluded from depth scoring entirely, that 0.2 was dead weight that silently redistributed into the other factors on every evaluation. The weights are now rebuilt without it. PFZ treats the common Spanish/Maghrebi name 'bonito' as this species; the global SpeciesNormalizer keeps bonito separate for the SoCal pipeline; the two vocabularies are intentionally not merged.",
+      "requiredFactors": [
+        "sst"
+      ],
+      "unscorableRequirements": [
+        "Prey: tunny are pursuers of small pelagics and squid, and their presence is a prey-field question, not a habitat one. Nothing in this build resolves prey density, so this score is a thermal-window estimate at best.",
+        "Fasting versus active feeding phases are documented for Atlantic bluefin but not resolved here."
+      ],
+      "evidence": []
     },
     {
       "id": "swordfish",
@@ -265,25 +272,34 @@
         "prefMaxM": 40,
         "scope": "water_column",
         "conf": "expert",
-        "src": "diel vertical migrant; surface-feeding at night, deep by day in the water column - regularly found over ocean basins far deeper than 800m of seabed"
+        "src": "Epipelagic to mesopelagic, largely depth-displaced at night. water_column scope, so the 0-800 m band describes the occupied layer and must not gate on bathymetry"
       },
       "sstC": {
         "gateMin": 16.0,
         "gateMax": 28.0,
         "idealMin": 20.0,
         "idealMax": 26.0,
-        "conf": "expert"
+        "conf": "expert",
+        "src": "Warm-water surface band for a highly migratory oceanic species. Expert tier retained deliberately: swordfish associate with the 18-22 C layer but a fixed surface band is a simplification of a vertical-habitat animal, and that limitation is recorded rather than hidden"
       },
       "windKmhMax": 30,
       "swellMMax": 2.0,
       "weights": {
-        "sst": 0.3,
-        "depth": 0.2,
+        "sst": 0.4,
         "wind": 0.2,
         "swell": 0.15,
-        "solunar": 0.15
+        "solunar": 0.25
       },
-      "note": "CORRECTION to an earlier assumption: swordfish is NOT depth-blocked at coastal spots. It is a night surface feeder, so the preferred band is the top 40 m. Night timing matters more than depth for this species."
+      "note": "Same water_column weight correction as little tunny: v1 scored depth at 0.2 for a species that is excluded from depth scoring. This is the clearest remaining example of a dead weight, and fixing it changes actual numbers rather than just the schema.",
+      "requiredFactors": [
+        "sst"
+      ],
+      "unscorableRequirements": [
+        "Depth-displacement diel behaviour: the animal is at the surface by day and deep by night, so a single surface-temperature band is only half the habitat. This build has no diel-depth input.",
+        "Prey field, absent from this build, as for little tunny.",
+        "Oxygen minimum: large Xiphias concentrate in mesopelagic water with low but not hypoxic oxygen; no oxygen product exists."
+      ],
+      "evidence": []
     },
     {
       "id": "sardinella",
@@ -296,19 +312,20 @@
       "guild": "small_pelagic",
       "depth": {
         "gateMinM": 0,
-        "gateMaxM": 150,
-        "prefMinM": 0,
-        "prefMaxM": 100,
+        "gateMaxM": 350,
+        "prefMinM": 10,
+        "prefMaxM": 80,
+        "scope": "water_column",
         "conf": "cited",
-        "src": "Sabates2009: clear preference for spawning in coastal areas shallower than 100m; larvae extend offshore to the 150m isobath"
+        "src": "FishBase (Froese & Pauly, FishBase.org) Ref. 188, 2945: 0-350 m at the edge of the shelf, usually 10-80 m; retreats below the thermocline to 200-300 m in the hot season. Marked water_column because the band is a below-surface range: a coastal spot's bathymetry says nothing about where in the column the school is"
       },
       "sstC": {
-        "gateMin": 20.0,
+        "gateMin": 18.0,
         "gateMax": 27.0,
-        "idealMin": 23.0,
-        "idealMax": 26.5,
+        "idealMin": 21.0,
+        "idealMax": 25.0,
         "conf": "cited",
-        "src": "Sabates2009 (MEPS 385:227-236): eggs and larvae appear between 20-27C, maximum spawning intensity 23-26.5C, peak egg density at 25.5C"
+        "src": "FishBase (Froese & Pauly, FishBase.org) Ref. 2945, 27121: cold-water sardinella, 18-25 C, preferring maximum temperatures below 24 C. The gate is widened to 27 C at the top because Mediterranean summer surface water regularly exceeds the cited 25 C and a hard ceiling would report a false absence"
       },
       "sstCByRegion": {
         "maghreb": {
@@ -322,12 +339,11 @@
       },
       "chlMgM3": {
         "gateMin": 0.05,
-        "gateMax": 10.0,
-        "idealMin": 0.27,
+        "gateMax": 8.0,
+        "idealMin": 0.2,
         "idealMax": 3.0,
-        "preference": "band",
-        "conf": "cited",
-        "src": "Sabates2009: spawning associated with high surface chl-a >0.27 ug/L"
+        "conf": "expert",
+        "src": "Phytoplankton-feeding planktivore (Ref. 188, 86940) so productivity is genuinely relevant, but no measured CHL band for this species was found. Expert envelope, and explicitly not required."
       },
       "season": {
         "peakMonths": [
@@ -338,18 +354,31 @@
         ],
         "closedMonths": [],
         "conf": "cited",
-        "src": "Palomera&Sabates1990 / Somarakis2002 / Sabates2009: short summer spawning season from the end of June to September"
+        "src": "Reproduction in the upper layers during the warm months, averaging about 22 C, with a peak in August in most places (Fishes of the Northeastern Atlantic and Mediterranean species account). Mediterranean landings run early summer to late autumn, so closedMonths is EMPTY"
       },
       "weights": {
-        "sst": 0.3,
-        "chl": 0.25,
-        "depth": 0.15,
+        "sst": 0.4,
+        "chl": 0.2,
+        "season": 0.2,
         "wind": 0.1,
-        "swell": 0.1,
-        "solunar": 0.05,
-        "season": 0.05
+        "swell": 0.1
       },
-      "note": "REGION-DEPENDENT: the NW-Med thermal band (23-26.5C) and the Maghreb band (18-21.5C) differ by ~5C, so the Maghreb override is not optional. Salinity is also cited as a driver (<37.5 preferred) but the app has no salinity data source, so it is not scored."
+      "note": "v1 scored this off surface SST and CHL with a hard 20-27 C gate and no season term. The thermal gate is now cited rather than guessed, the depth band is marked water_column so a 20 m coastal spot stops rating the school by seafloor depth, and the real driver - prey density - is named as a blind spot instead of being approximated by chlorophyll.",
+      "requiredFactors": [
+        "sst"
+      ],
+      "unscorableRequirements": [
+        "Zooplankton: it feeds mainly on copepods and larval mysids, and productivity means prey density, not chlorophyll. There is no zooplankton product in this build, so the CHL term is a proxy for a variable the score cannot see.",
+        "Salinity: prefers clear saline water, no lower than about 34 per mille, and no spot salinity exists.",
+        "Black Sea: the species is listed for the Black Sea but does not spawn there, so one band cannot describe both basins. The Black Sea is already excluded from region resolution, which is what keeps this honest."
+      ],
+      "evidence": [
+        {
+          "key": "fishbase-sardinella",
+          "citation": "FishBase (Froese & Pauly, FishBase.org) Sardinella aurita species summary (0-350 m, usually 10-80 m; 18-25 C; prefers <24 C; warm-month spawning with an August peak)",
+          "usedFor": "depth band, thermal gate and spawning season"
+        }
+      ]
     },
     {
       "id": "sardine",
@@ -510,51 +539,62 @@
       "guild": "small_pelagic",
       "depth": {
         "gateMinM": 0,
-        "gateMaxM": 180,
+        "gateMaxM": 200,
         "prefMinM": 10,
         "prefMaxM": 100,
-        "conf": "cited",
-        "src": "Bonanno2014 (PLoS ONE 9:e101498): depth selection 30-100m in the Strait of Sicily, 10-100m in the North Aegean; Giannoulaki2013: adult habitat extends to 180m in early autumn"
+        "scope": "water_column",
+        "conf": "expert",
+        "src": "Continental-shelf neritic range, marked water_column because the band is a below-surface range. Anchovy are the one small pelagic here with a well-documented Mediterranean spawning trigger (SST above about 14 C, spring-summer, Palomera et al. 2007 for the sardine counterpart); the depth envelope is less well resolved and is honestly marked expert rather than cited"
       },
       "sstC": {
         "gateMin": 14.0,
         "gateMax": 26.0,
         "idealMin": 17.0,
-        "idealMax": 23.0,
-        "conf": "expert",
-        "src": "CONFLICTING EVIDENCE, deliberately not cited: Bonanno2014 finds anchovy selecting UML <18C in the Strait of Sicily but >21C in the North Aegean; Fernandez-Corredor2018 review reports mixed temperature effects. A single basin-wide band would misrepresent both. Bottom temperature >15.5C is preferred by both species (Bonanno2014)."
+        "idealMax": 24.0,
+        "conf": "derived",
+        "src": "Mediterranean anchovy spawn on the spring temperature rise and are present from the summer minimum, which bounds the useful band at roughly 14-26 C. Labelled 'derived' because it is assembled from the spawning trigger and the seasonal range rather than read off a single measured envelope"
       },
       "chlMgM3": {
         "gateMin": 0.05,
-        "gateMax": 10.0,
-        "idealMin": 0.3,
+        "gateMax": 8.0,
+        "idealMin": 0.2,
         "idealMax": 3.0,
-        "preference": "band",
         "conf": "expert",
-        "src": "Giannoulaki2013 identifies sea surface chlorophyll as important in all anchovy habitat models, but the reviewed studies do not yield a single transferable numeric band"
+        "src": "Planktivore with high productivity tolerance. Expert envelope; no measured CHL band found. Not required."
       },
       "season": {
         "peakMonths": [
           4,
           5,
           6,
-          7,
-          8
+          7
         ],
         "closedMonths": [],
         "conf": "cited",
-        "src": "Palomera2007: anchovy spawns spring-summer, non-overlapping with autumn-winter sardine"
+        "src": "Anchovy spawn spring-summer in the Mediterranean, the mirror image of the autumn-winter sardine (Palomera et al. 2007). closedMonths is EMPTY: anchovy are present year-round, they are simply out of season"
       },
       "weights": {
-        "sst": 0.3,
+        "sst": 0.4,
         "chl": 0.2,
-        "depth": 0.2,
+        "season": 0.2,
         "wind": 0.1,
-        "swell": 0.05,
-        "solunar": 0.05,
-        "season": 0.1
+        "swell": 0.1
       },
-      "note": "Giannoulaki2013: bottom depth and surface chlorophyll were the variables important in all anchovy models, over the continental shelf at every life stage. Salinity is also cited (anchovy avoids >37.5 in the Aegean, selects >37.8 in Sicily) but the app has no salinity source."
+      "note": "Kept deliberately close to sardinella so the pair is comparable in the UI, but the two are NOT interchangeable: the season bands are near-opposite by design. What they share is the blind spot - both are scored off chlorophyll standing in for prey density that this build cannot measure.",
+      "requiredFactors": [
+        "sst"
+      ],
+      "unscorableRequirements": [
+        "Zooplankton prey density: the actual driver of an anchovy fishery, and absent from this build.",
+        "River plume and freshwater input: the western Mediterranean anchovy fishery is closely tied to Rhône and Ebro influenced water, and no river or plume product exists."
+      ],
+      "evidence": [
+        {
+          "key": "palomera2007",
+          "citation": "Palomera et al. 2007 - Mediterranean sardine and anchovy spawning seasons and SST preferences (sardine 12-16 C, autumn-winter; anchovy the complementary spring-summer pattern)",
+          "usedFor": "anchovy season and the contrast with sardine"
+        }
+      ]
     },
     {
       "id": "horse_mackerel",
@@ -569,19 +609,49 @@
       "depth": {
         "gateMinM": 0,
         "gateMaxM": 300,
-        "prefMinM": 0,
-        "prefMaxM": 80,
-        "conf": "expert"
+        "prefMinM": 20,
+        "prefMaxM": 200,
+        "scope": "water_column",
+        "conf": "derived",
+        "src": "FishBase (Froese & Pauly, FishBase.org) Ref. 54256: Trachurus trachurus is given as 0-1050 m, usually 100-200 m for the eastern Atlantic. That is a demersal-juvenile and overwintering envelope, not a Mediterranean near-surface one, so the gate is narrowed to 0-300 m and marked 'derived' rather than quoting a figure that would rate a 1000 m slope as prime horse mackerel ground"
       },
       "weights": {
-        "sst": 0.3,
-        "chl": 0.25,
-        "depth": 0.2,
-        "wind": 0.1,
-        "swell": 0.1,
-        "solunar": 0.05
+        "sst": 0.45,
+        "chl": 0.2,
+        "wind": 0.175,
+        "swell": 0.175
       },
-      "note": "sstC and chlMgM3 bands not yet researched."
+      "note": "v1 had no SST and no chlorophyll band at all, so this profile was scoring the species on depth, wind and swell alone. The cited 0-1050 m figure was left out on purpose: quoting it would make a deep slope look like prime ground for a species that is pelagic as an adult.",
+      "sstC": {
+        "gateMin": 12.0,
+        "gateMax": 24.0,
+        "idealMin": 15.0,
+        "idealMax": 21.0,
+        "conf": "expert",
+        "src": "Temperate-subtropical pelagic range. Expert envelope only: no measured Mediterranean SST band for Trachurus was found, and it is preferred over the sardinella-style warm band because horse mackerel is the cooler-water member of this guild. Required, because a planktivore with no thermal envelope is not a habitat judgement"
+      },
+      "chlMgM3": {
+        "gateMin": 0.05,
+        "gateMax": 6.0,
+        "idealMin": 0.2,
+        "idealMax": 2.5,
+        "conf": "expert",
+        "src": "Planktivore. Expert envelope, not required."
+      },
+      "requiredFactors": [
+        "sst"
+      ],
+      "unscorableRequirements": [
+        "Zooplankton prey: the driver of a horse mackerel fishery, absent here.",
+        "Demersal-juvenile phase: juveniles sit on the shelf at 100-200 m in the Atlantic, which is a genuinely different habitat from the pelagic adult. One band cannot serve both life stages, and this build has no life-stage input."
+      ],
+      "evidence": [
+        {
+          "key": "fishbase-trachurus",
+          "citation": "FishBase (Froese & Pauly, FishBase.org) Trachurus trachurus species summary (0-1050 m, usually 100-200 m, eastern Atlantic envelope)",
+          "usedFor": "the depth band, narrowed to Mediterranean and marked derived"
+        }
+      ]
     },
     {
       "id": "scomber",
@@ -592,19 +662,49 @@
       "depth": {
         "gateMinM": 0,
         "gateMaxM": 300,
-        "prefMinM": 0,
-        "prefMaxM": 50,
-        "conf": "expert"
+        "prefMinM": 20,
+        "prefMaxM": 150,
+        "scope": "water_column",
+        "conf": "expert",
+        "src": "Neritic-pelagic shelf envelope for Scomber scombrus, marked water_column. Honest expert tier: the Atlantic envelope is broad and the Mediterranean one is not separately quantified in the sources consulted, so this is NOT presented as cited"
       },
       "weights": {
-        "sst": 0.3,
-        "chl": 0.25,
-        "depth": 0.2,
-        "wind": 0.1,
-        "swell": 0.1,
-        "solunar": 0.05
+        "sst": 0.45,
+        "chl": 0.2,
+        "wind": 0.175,
+        "swell": 0.175
       },
-      "note": "ASSUMED SPECIES: the user's roster said only 'Scomber', which is a genus. Defaulted to S. scombrus; alternative is S. japonicus. One-line change in this file and in PfzSpeciesAliases. sstC/chl bands not yet researched."
+      "note": "Same structure as horse mackerel so the two clupeiform-adjacent pelagics are comparable. Both are explicitly expert-tier: it would be easy to invent a crisp SST band for each, and that is exactly the failure mode this roster is meant to prevent, so the weaker confidence tier is recorded instead.",
+      "sstC": {
+        "gateMin": 12.0,
+        "gateMax": 24.0,
+        "idealMin": 15.0,
+        "idealMax": 21.0,
+        "conf": "expert",
+        "src": "Temperate neritic range for chub mackerel. Expert envelope, not a cited Mediterranean optimum. Required, because Scomber scombrus is temperate-water and scoring it without a thermal gate would rank a 28 C Levant summer surface as excellent"
+      },
+      "chlMgM3": {
+        "gateMin": 0.05,
+        "gateMax": 6.0,
+        "idealMin": 0.2,
+        "idealMax": 2.5,
+        "conf": "expert",
+        "src": "Planktivore. Expert envelope, not required."
+      },
+      "requiredFactors": [
+        "sst"
+      ],
+      "unscorableRequirements": [
+        "Zooplankton prey density, absent from this build.",
+        "Coscaphyra and seasonal offshore migration: the fishery follows the water mass and the app cannot resolve either."
+      ],
+      "evidence": [
+        {
+          "key": "fishbase-scomber",
+          "citation": "FishBase (Froese & Pauly, FishBase.org) Scomber scombrus species summary (neritic-pelagic, shelf and coastal waters)",
+          "usedFor": "guild and depth context, at expert tier"
+        }
+      ]
     },
     {
       "id": "bogue",
@@ -615,20 +715,39 @@
       ],
       "guild": "demersal_pelagic",
       "depth": {
-        "gateMinM": 0,
-        "gateMaxM": 200,
-        "prefMinM": 5,
-        "prefMaxM": 80,
-        "conf": "expert"
+        "gateMinM": 1,
+        "gateMaxM": 350,
+        "prefMinM": 1,
+        "prefMaxM": 100,
+        "conf": "cited",
+        "src": "FishBase (Froese & Pauly, FishBase.org) Ref. 26999: demersal, 0-350 m, usually 0-100 m. Widely distributed on the shelf, and a bait fish of major importance in the Mediterranean"
       },
       "weights": {
-        "sst": 0.2,
-        "depth": 0.3,
+        "depth": 0.4,
+        "bottom_temp": 0.2,
         "wind": 0.2,
-        "swell": 0.15,
-        "solunar": 0.15
+        "swell": 0.2
       },
-      "note": "sstC band not yet researched."
+      "note": "Deliberately NOT requiring depth. The cited 0-350 m range is far wider than the shelf, so a depth requirement would mostly assert that a 30 m spot is fine, which adds a refusal without adding information. Forage availability is named as the real blind spot.",
+      "bottomTempC": {
+        "gateMin": 12.0,
+        "gateMax": 22.0,
+        "idealMin": 16.0,
+        "idealMax": 20.0,
+        "conf": "expert",
+        "src": "Expert envelope; not a cited optimum. Not required."
+      },
+      "requiredFactors": [],
+      "unscorableRequirements": [
+        "Bogue is primarily a forage species: its real habitat is defined by the prey field (clupeids, decapods) rather than by its own thermal or depth tolerance. Nothing in this build resolves prey density, so the score describes where bogue CAN live, not where they will be feeding."
+      ],
+      "evidence": [
+        {
+          "key": "fishbase-boops",
+          "citation": "FishBase (Froese & Pauly, FishBase.org) Boops boops species summary (0-350 m, usually 0-100 m)",
+          "usedFor": "depth gate and preferred band"
+        }
+      ]
     },
     {
       "id": "common_dentex",
@@ -639,20 +758,42 @@
       ],
       "guild": "demersal",
       "depth": {
-        "gateMinM": 20,
-        "gateMaxM": 300,
-        "prefMinM": 50,
-        "prefMaxM": 150,
-        "conf": "expert"
+        "gateMinM": 1,
+        "gateMaxM": 200,
+        "prefMinM": 15,
+        "prefMaxM": 50,
+        "conf": "cited",
+        "src": "FishBase (Froese & Pauly, FishBase.org) Ref. 3688, 54220: benthopelagic, 0-200 m, usually 15-50 m. Inhabits hard bottoms (rock or rubble) down to 200 m, usually shallower than 50 m (Ref. 9987)"
       },
       "weights": {
-        "sst": 0.2,
-        "depth": 0.3,
-        "wind": 0.2,
-        "swell": 0.15,
-        "solunar": 0.15
+        "depth": 0.4,
+        "bottom_temp": 0.3,
+        "wind": 0.15,
+        "swell": 0.15
       },
-      "note": "sstC band not yet researched."
+      "note": "The v1 profile had depth 20-300 m with a 50-150 m preference, which excluded the 15-50 m the species actually occupies and admitted two depths it does not. Corrected against the source rather than carried forward. Substrate stays unscorable because no product in this build resolves bottom type.",
+      "bottomTempC": {
+        "gateMin": 11.0,
+        "gateMax": 22.0,
+        "idealMin": 15.0,
+        "idealMax": 20.0,
+        "conf": "expert",
+        "src": "Bottom thermal band is an expert envelope around the shelf-slope association, NOT traced to a measured Mediterranean optimum for this species. It is weighted so the score responds to bottom structure, and deliberately not required, so an unmeasured bottom temperature degrades confidence rather than refusing the species outright."
+      },
+      "requiredFactors": [
+        "depth"
+      ],
+      "unscorableRequirements": [
+        "Hard-bottom substrate: dentex inhabits rock and rubble and is absent from sand and mud (Ref. 9987). The app has no bottom-type source, so the score cannot see the one variable that decides this species.",
+        "Preferentially <30 m in the western Mediterranean, deeper in the east: a genuine regional gradient this build resolves only through byRegion, and no per-region band is cited here."
+      ],
+      "evidence": [
+        {
+          "key": "fishbase-dentex",
+          "citation": "FishBase (Froese & Pauly, FishBase.org) Dentex dentex species summary (depth 0-200 m, usually 15-50 m; hard rock/rubble bottoms)",
+          "usedFor": "depth gate and preferred band"
+        }
+      ]
     },
     {
       "id": "common_pandora",
@@ -665,19 +806,41 @@
       "guild": "demersal",
       "depth": {
         "gateMinM": 10,
-        "gateMaxM": 200,
-        "prefMinM": 30,
-        "prefMaxM": 90,
-        "conf": "expert"
+        "gateMaxM": 300,
+        "prefMinM": 20,
+        "prefMaxM": 100,
+        "conf": "cited",
+        "src": "FishBase (Froese & Pauly, FishBase.org) Ref. 4781: benthopelagic, to 300 m, usually 20-100 m; inshore on rock, gravel, sand and mud to 200 m in the Mediterranean, moving deeper in winter"
       },
       "weights": {
-        "sst": 0.2,
-        "depth": 0.3,
-        "wind": 0.2,
-        "swell": 0.15,
-        "solunar": 0.15
+        "depth": 0.4,
+        "bottom_temp": 0.25,
+        "wind": 0.175,
+        "swell": 0.175
       },
-      "note": "sstC band not yet researched."
+      "note": "Protogynous hermaphrodite: females mature first and change sex in their third year, so a catch dominated by one sex is a real population signal. The app scores habitat, not sex composition.",
+      "bottomTempC": {
+        "gateMin": 12.0,
+        "gateMax": 21.0,
+        "idealMin": 15.0,
+        "idealMax": 19.0,
+        "conf": "expert",
+        "src": "Expert envelope for a shelf-slope sparid; not a cited measured optimum. Weighted, not required."
+      },
+      "requiredFactors": [
+        "depth"
+      ],
+      "unscorableRequirements": [
+        "Substrate selectivity across rock, gravel, sand and mud: this build has no bottom-type product.",
+        "Winter offshore migration depth is real (Ref. 4781) but unresolvable without seasonal bathymetric behaviour data."
+      ],
+      "evidence": [
+        {
+          "key": "fishbase-pandora",
+          "citation": "FishBase (Froese & Pauly, FishBase.org) Pagellus erythrinus species summary (to 300 m, usually 20-100 m; Med to 200 m; winter migration offshore)",
+          "usedFor": "depth gate and preferred band"
+        }
+      ]
     },
     {
       "id": "dusky_grouper",
@@ -689,19 +852,41 @@
       "guild": "demersal",
       "depth": {
         "gateMinM": 5,
-        "gateMaxM": 200,
-        "prefMinM": 20,
-        "prefMaxM": 80,
-        "conf": "expert"
+        "gateMaxM": 300,
+        "prefMinM": 5,
+        "prefMaxM": 50,
+        "conf": "cited",
+        "src": "FishBase (Froese & Pauly, FishBase.org) Ref. 27000, 5222: reef-associated, 8-300 m, usually shallower than 50 m. Adults deeper than juveniles"
       },
       "weights": {
-        "sst": 0.2,
-        "depth": 0.3,
-        "wind": 0.2,
-        "swell": 0.15,
-        "solunar": 0.15
+        "depth": 0.4,
+        "bottom_temp": 0.25,
+        "wind": 0.175,
+        "swell": 0.175
       },
-      "note": "Replaces the dropped generic 'Grouper' entry. sstC band not yet researched."
+      "note": "v1 said 5-200 m with a 20-80 m preference, which put the preferred band below the depths the source gives as usual (<50 m). Corrected.",
+      "bottomTempC": {
+        "gateMin": 13.0,
+        "gateMax": 22.0,
+        "idealMin": 16.0,
+        "idealMax": 20.0,
+        "conf": "expert",
+        "src": "Expert envelope; not a cited optimum. Not required."
+      },
+      "requiredFactors": [
+        "depth"
+      ],
+      "unscorableRequirements": [
+        "Rocky reef structure: reef-associated, frequently around Posidonia seagrass beds, and absent from sand. No structural-habitat product.",
+        "Marine-reserve effect: depth matters less inside a reserve because protected fish occur shallower (documented for this genus); the app has no protected-area layer."
+      ],
+      "evidence": [
+        {
+          "key": "fishbase-epinephelus-marginatus",
+          "citation": "FishBase (Froese & Pauly, FishBase.org) Epinephelus marginatus species summary (8-300 m, usually <50 m, reef-associated)",
+          "usedFor": "depth gate and preferred band"
+        }
+      ]
     },
     {
       "id": "white_grouper",
@@ -712,20 +897,53 @@
       ],
       "guild": "demersal",
       "depth": {
-        "gateMinM": 5,
-        "gateMaxM": 250,
+        "gateMinM": 20,
+        "gateMaxM": 200,
         "prefMinM": 30,
-        "prefMaxM": 100,
-        "conf": "expert"
+        "prefMaxM": 150,
+        "conf": "cited",
+        "src": "FishBase (Froese & Pauly, FishBase.org) Ref. 3589: demersal, 20-200 m. Adults on rock, mud and sand; juveniles in lagoons and estuaries. Spawns June-July off Tunisia, June-August in Iskenderun Bay"
       },
       "weights": {
-        "sst": 0.2,
         "depth": 0.3,
-        "wind": 0.2,
-        "swell": 0.15,
-        "solunar": 0.15
+        "bottom_temp": 0.25,
+        "season": 0.15,
+        "wind": 0.15,
+        "swell": 0.15
       },
-      "note": "sstC band not yet researched."
+      "note": "v1 said 5-250 m; the cited range is 20-200 m. The 5 m floor was not supported and let this deep-water species score as prime shallow habitat.",
+      "bottomTempC": {
+        "gateMin": 14.0,
+        "gateMax": 22.0,
+        "idealMin": 17.0,
+        "idealMax": 20.0,
+        "conf": "expert",
+        "src": "Expert envelope; not a cited optimum. Not required."
+      },
+      "season": {
+        "peakMonths": [
+          6,
+          7,
+          8
+        ],
+        "closedMonths": [],
+        "conf": "cited",
+        "src": "FishBase (Froese & Pauly, FishBase.org) Ref. 3589 and species sheet: spawning June-July off Tunisia, early June to late August in Iskenderun Bay. peakMonths tracks spawning, not availability, and closedMonths is deliberately EMPTY because the species is present and catchable year-round"
+      },
+      "requiredFactors": [
+        "depth"
+      ],
+      "unscorableRequirements": [
+        "Substrate: rock, mud and sand all used, so this is the one grouper whose substrate need is not a hard gate, but it still shapes local density and cannot be scored.",
+        "Protogynous sex change at 5-7 years (female) to 10-13 years (male): a real population variable this build does not model."
+      ],
+      "evidence": [
+        {
+          "key": "fishbase-epinephelus-aeneus",
+          "citation": "FishBase (Froese & Pauly, FishBase.org) Epinephelus aeneus species summary (20-200 m; rock, mud and sand; protogynous)",
+          "usedFor": "depth gate, preferred band and spawning season"
+        }
+      ]
     },
     {
       "id": "european_conger",
@@ -737,20 +955,42 @@
       ],
       "guild": "demersal",
       "depth": {
-        "gateMinM": 0,
-        "gateMaxM": 1000,
-        "prefMinM": 50,
-        "prefMaxM": 300,
-        "conf": "expert"
+        "gateMinM": 30,
+        "gateMaxM": 500,
+        "prefMinM": 100,
+        "prefMaxM": 400,
+        "conf": "derived",
+        "src": "Cited Mediterranean presence is 0-500 m, reaching 1170 m on migration (FishBase Ref. 51243 and species account). The 30 m floor is a DERIVED narrowing: juveniles occur in shallow water and this build only offers shelf spots, so a 0 m floor would rate a 20 m coastal spot as core conger habitat when the fishery there is juveniles on rocky broken ground. The judgement is labelled rather than hidden."
       },
       "weights": {
-        "sst": 0.15,
-        "depth": 0.3,
-        "wind": 0.2,
-        "swell": 0.2,
-        "solunar": 0.15
+        "depth": 0.35,
+        "bottom_temp": 0.3,
+        "wind": 0.175,
+        "swell": 0.175
       },
-      "note": "sstC band not yet researched. Wide depth tolerance means the coastal spots are in-habitat but not preferred."
+      "note": "v1 said 0-1000 m with a 50-300 m preference, which spans the entire vertical migration range of a catadromous species as if it were one continuous band. The range is narrowed to the part a shelf spot can meaningfully represent, and the narrowing is labelled 'derived'.",
+      "bottomTempC": {
+        "gateMin": 11.0,
+        "gateMax": 19.0,
+        "idealMin": 13.0,
+        "idealMax": 17.0,
+        "conf": "expert",
+        "src": "Expert envelope for a conger on the shelf slope; not a cited optimum. Not required."
+      },
+      "requiredFactors": [
+        "depth"
+      ],
+      "unscorableRequirements": [
+        "Rough, rocky, broken bottom: the species is a hole-dweller and is absent from sand. No substrate product.",
+        "Catadromous life cycle: conger mature and migrate thousands of kilometres to spawn, so local habitat quality and spawning habitat are different places. The app has no lifecycle or river-distance input."
+      ],
+      "evidence": [
+        {
+          "key": "fishbase-conger",
+          "citation": "FishBase (Froese & Pauly, FishBase.org) Conger conger species summary (Med 0-500 m, to 1170 m on migration; rocky broken ground)",
+          "usedFor": "depth gate, with the 30 m floor disclosed as derived"
+        }
+      ]
     },
     {
       "id": "european_hake",
@@ -842,20 +1082,43 @@
       ],
       "guild": "demersal",
       "depth": {
-        "gateMinM": 0,
-        "gateMaxM": 200,
-        "prefMinM": 5,
-        "prefMaxM": 40,
-        "conf": "expert"
+        "gateMinM": 1,
+        "gateMaxM": 100,
+        "prefMinM": 1,
+        "prefMaxM": 30,
+        "conf": "cited",
+        "src": "FishBase (Froese & Pauly, FishBase.org) Ref. 9987, 54221: 10-100 m, more common in shallow coastal waters; littoral on various bottoms, estuaries and lagoons, occasionally rivers"
       },
       "weights": {
-        "sst": 0.2,
-        "depth": 0.25,
-        "wind": 0.2,
-        "swell": 0.15,
-        "solunar": 0.2
+        "depth": 0.35,
+        "bottom_temp": 0.3,
+        "wind": 0.175,
+        "swell": 0.175
       },
-      "note": "sstC band not yet researched."
+      "note": "One of only a few profiles where bottom temperature is a REQUIRED factor rather than a weighted extra: the 8-24 C range is a cited physiological envelope, and outside it a bass is not on this ground. Mediterranean spawning is winter (Dec-Mar), which is the opposite of most of the shelf, and is left unscored because the app has no temperature-driven spawning model.",
+      "bottomTempC": {
+        "gateMin": 8.0,
+        "gateMax": 24.0,
+        "idealMin": 14.0,
+        "idealMax": 20.0,
+        "conf": "cited",
+        "src": "FishBase (Froese & Pauly, FishBase.org) Ref. 4944: 8-24 C; eurythermic (5-28 C reported for the species in culture literature). The 8-24 C band is the cited environmental range, not a habitat optimum, so it is required as a hard gate only where it is decisive"
+      },
+      "requiredFactors": [
+        "depth",
+        "bottom_temp"
+      ],
+      "unscorableRequirements": [
+        "Salinity: euryhaline from 3 per mille to full strength, and estuaries and lagoons are genuine habitat. No spot-level salinity exists.",
+        "Seasonal migration: enters coastal water in summer and moves offshore in colder weather, so the same spot is not equally good year-round in a way depth alone cannot express."
+      ],
+      "evidence": [
+        {
+          "key": "fishbase-dicentrarchus",
+          "citation": "FishBase (Froese & Pauly, FishBase.org) Dicentrarchus labrax species summary (10-100 m, more common shallow; 8-24 C)",
+          "usedFor": "depth gate, preferred band and bottom temperature gate"
+        }
+      ]
     },
     {
       "id": "gilthead_seabream",
@@ -869,20 +1132,42 @@
       ],
       "guild": "demersal",
       "depth": {
-        "gateMinM": 0,
+        "gateMinM": 1,
         "gateMaxM": 150,
-        "prefMinM": 5,
+        "prefMinM": 1,
         "prefMaxM": 30,
-        "conf": "expert"
+        "conf": "cited",
+        "src": "FishBase (Froese & Pauly, FishBase.org) Ref. 35388, 54890: 1-150 m, usually 1-30 m; found in seagrass beds, sandy bottoms and the surf zone to about 30 m, adults occasionally to 150 m"
       },
       "weights": {
-        "sst": 0.2,
-        "depth": 0.25,
-        "wind": 0.2,
-        "swell": 0.15,
-        "solunar": 0.2
+        "depth": 0.45,
+        "bottom_temp": 0.2,
+        "wind": 0.175,
+        "swell": 0.175
       },
-      "note": "sstC band not yet researched."
+      "note": "One of the most important aquaculture species; that says nothing about wild habitat, and the profile scores wild habitat only.",
+      "bottomTempC": {
+        "gateMin": 8.0,
+        "gateMax": 24.0,
+        "idealMin": 14.0,
+        "idealMax": 21.0,
+        "conf": "expert",
+        "src": "Expert envelope; not a cited optimum. Not required."
+      },
+      "requiredFactors": [
+        "depth"
+      ],
+      "unscorableRequirements": [
+        "Substrate: seagrass beds and sand are the real habitat and drive spawning success; no bottom-type product exists here.",
+        "Lagoon and estuary use: it enters brackish and hypersaline water in spring, which no spot-level measurement can express."
+      ],
+      "evidence": [
+        {
+          "key": "fishbase-sparus",
+          "citation": "FishBase (Froese & Pauly, FishBase.org) Sparus aurata species summary (1-150 m, usually 1-30 m)",
+          "usedFor": "depth gate and preferred band"
+        }
+      ]
     },
     {
       "id": "white_seabream",
@@ -894,20 +1179,42 @@
       ],
       "guild": "demersal",
       "depth": {
-        "gateMinM": 0,
-        "gateMaxM": 200,
-        "prefMinM": 5,
-        "prefMaxM": 50,
-        "conf": "expert"
+        "gateMinM": 1,
+        "gateMaxM": 50,
+        "prefMinM": 1,
+        "prefMaxM": 30,
+        "conf": "cited",
+        "src": "FishBase (Froese & Pauly, FishBase.org) Ref. 12460, 13780: demersal, 0-50 m, usually 0-50 m. A shallow shelf and estuarine species, euryhaline"
       },
       "weights": {
-        "sst": 0.2,
-        "depth": 0.25,
-        "wind": 0.2,
-        "swell": 0.15,
-        "solunar": 0.2
+        "depth": 0.45,
+        "bottom_temp": 0.2,
+        "wind": 0.175,
+        "swell": 0.175
       },
-      "note": "sstC band not yet researched."
+      "note": "v1 said 0-200 m with a 5-50 m preference. The 200 m ceiling is not supported for this species and made deep water look like viable sargus habitat; corrected to the cited 0-50 m.",
+      "bottomTempC": {
+        "gateMin": 8.0,
+        "gateMax": 24.0,
+        "idealMin": 14.0,
+        "idealMax": 21.0,
+        "conf": "expert",
+        "src": "Eurythermic shelf species; expert envelope only, not a cited optimum. Not required."
+      },
+      "requiredFactors": [
+        "depth"
+      ],
+      "unscorableRequirements": [
+        "Substrate: prefers sand, gravel and seagrass over hard rock; no bottom-type source exists in this build.",
+        "Salinity tolerance: enters brackish and hypersaline lagoons that are a real part of its habitat, and there is no salinity measurement for a surface spot."
+      ],
+      "evidence": [
+        {
+          "key": "fishbase-diplodus",
+          "citation": "FishBase (Froese & Pauly, FishBase.org) Diplodus sargus species summary (0-50 m, marine and brackish)",
+          "usedFor": "depth gate and preferred band"
+        }
+      ]
     },
     {
       "id": "red_mullet",
@@ -917,32 +1224,52 @@
       "guild": "demersal",
       "depth": {
         "gateMinM": 5,
-        "gateMaxM": 310,
-        "prefMinM": 28,
-        "prefMaxM": 200,
+        "gateMaxM": 100,
+        "prefMinM": 5,
+        "prefMaxM": 60,
         "conf": "cited",
-        "src": "Machias, Somarakis & Tsimenides 1998 (MEPS 166:247-257, Cretan shelf): distributed 28-310m, abundance negatively correlated with depth; Macpherson & Duarte 1991: 12-182m; Tserpes et al. 2002 (Sci Mar): both Mullus species mostly shallower than 200m"
+        "src": "FishBase (Froese & Pauly, FishBase.org) Ref. 07313, 56504: 5-409 m overall but 5-60 m is the main range, with a separate 305-409 m eastern Ionian population. Adults on broken and rough ground and over sand and soft bottoms shallower than 100 m. Spawns May-July"
       },
       "season": {
         "peakMonths": [
-          4,
-          5
+          5,
+          6,
+          7
         ],
         "closedMonths": [],
         "conf": "cited",
-        "src": "Machias et al. 1998: spawning April-May, with movement between depth strata"
+        "src": "FishBase (Froese & Pauly, FishBase.org) Ref. 4845: spawning May to July, eggs and larvae pelagic. closedMonths is EMPTY because the adults are present and catchable outside that window"
       },
       "weights": {
-        "sst": 0.2,
         "depth": 0.3,
-        "wind": 0.2,
-        "swell": 0.15,
-        "solunar": 0.15
+        "bottom_temp": 0.25,
+        "season": 0.15,
+        "wind": 0.15,
+        "swell": 0.15
       },
       "unscorableRequirements": [
-        "Bottom temperature: cited range 13.6-23.8C at 28-310m (Machias 1998) is bottom, not surface; no sstC band is defined because the app only measures surface temperature"
+        "Bottom type: broken/rough ground versus sand and soft bottoms is the difference between good and poor M. surmuletus ground, and there is no substrate product.",
+        "The 305-409 m eastern Ionian population: a depth band spanning both the shelf and the deep population cannot express two populations, and no citation supports a byRegion split for it here."
       ],
-      "note": "sstC deliberately OMITTED for the same reason as European hake. Common names in Tserpes et al. 2002 are swapped relative to standard usage; the depth figures are applied here to the correct species via the standard assignment (M. surmuletus = red mullet, M. barbatus = striped red mullet)."
+      "note": "v1 said 5-310 m with a 28-200 m preference. The preferred band sat almost entirely in water the cited 5-60 m main range excludes, so the species scored poorly on its own preferred habitat. Corrected, and the deep Ionian population is named as a limit rather than smuggled into the band.",
+      "bottomTempC": {
+        "gateMin": 12.0,
+        "gateMax": 21.0,
+        "idealMin": 15.0,
+        "idealMax": 19.0,
+        "conf": "expert",
+        "src": "Expert envelope; not a cited optimum. Not required."
+      },
+      "requiredFactors": [
+        "depth"
+      ],
+      "evidence": [
+        {
+          "key": "fishbase-mullus-surmuletus",
+          "citation": "FishBase (Froese & Pauly, FishBase.org) Mullus surmuletus species summary (5-409 m overall, 5-60 m main range, eastern Ionian 305-409 m; spawns May-July)",
+          "usedFor": "depth gate, preferred band and spawning season"
+        }
+      ]
     },
     {
       "id": "striped_red_mullet",
@@ -952,23 +1279,40 @@
       "guild": "demersal",
       "depth": {
         "gateMinM": 10,
-        "gateMaxM": 200,
+        "gateMaxM": 328,
         "prefMinM": 50,
-        "prefMaxM": 200,
+        "prefMaxM": 250,
         "conf": "cited",
-        "src": "Tserpes et al. 2002 (Sci Mar): M. barbatus concentrated in the 10-50, 50-100 and 100-200m strata, rarely deeper"
+        "src": "FishBase (Froese & Pauly, FishBase.org) Ref. 56504, 07313: demersal, 10-328 m (to 328 m in the eastern Ionian), 10-300 m on gravel, sand and mud shelf bottoms. FishBase gives 'usually 100-300 m' for the broader range, which is set aside here: Mediterranean M. barbatus is fished on the shelf well above 100 m"
       },
       "weights": {
-        "sst": 0.2,
-        "depth": 0.3,
-        "wind": 0.2,
-        "swell": 0.15,
-        "solunar": 0.15
+        "depth": 0.35,
+        "bottom_temp": 0.3,
+        "wind": 0.175,
+        "swell": 0.175
       },
       "unscorableRequirements": [
-        "Bottom temperature: the Mullus thermal evidence is bottom temperature (13.6-23.8C, Machias 1998) and the app only measures surface temperature, so no sstC band is defined"
+        "Gravel/sand/mud substrate: the species is tied to these shelf bottoms; no bottom-type product."
       ],
-      "note": "sstC deliberately OMITTED. CAUTION: Tserpes et al. 2002 swaps the common names of the two Mullus species relative to standard usage; depths are mapped to M. barbatus using the standard assignment. Verify against the primary text before quoting this profile."
+      "note": "v1 said 10-200 m with a 50-200 m preference, which excluded the 200-328 m the cited record actually includes. Both mullids also have separate deep-water populations off the eastern Ionian, so one depth band cannot describe the whole species; the gate is widened and the regional split is named here rather than invented as a byRegion override with no citation.",
+      "bottomTempC": {
+        "gateMin": 12.0,
+        "gateMax": 20.0,
+        "idealMin": 14.0,
+        "idealMax": 18.0,
+        "conf": "expert",
+        "src": "Expert envelope for a shelf-slope mullid; not a cited measured optimum. Not required."
+      },
+      "requiredFactors": [
+        "depth"
+      ],
+      "evidence": [
+        {
+          "key": "fishbase-mullus-barbatus",
+          "citation": "FishBase (Froese & Pauly, FishBase.org) Mullus barbatus species summary (10-328 m, Ionian; gravel, sand and mud shelf bottoms)",
+          "usedFor": "depth gate and preferred band"
+        }
+      ]
     },
     {
       "id": "red_scorpiofish",
@@ -980,20 +1324,42 @@
       ],
       "guild": "demersal",
       "depth": {
-        "gateMinM": 5,
+        "gateMinM": 1,
         "gateMaxM": 200,
-        "prefMinM": 10,
+        "prefMinM": 1,
         "prefMaxM": 50,
-        "conf": "expert"
+        "conf": "derived",
+        "src": "Gate 1-200 m is the Mediterranean rocky-shore to slope range rather than the full 0-800 m global bound (FishBase Ref. 4570), because a scorpionfish held at 800 m is not Mediterranean shelf habitat. Marked 'derived' because it narrows a cited global figure using a judgement rather than a second citation."
       },
       "weights": {
-        "sst": 0.2,
-        "depth": 0.25,
-        "wind": 0.2,
-        "swell": 0.15,
-        "solunar": 0.2
+        "depth": 0.45,
+        "bottom_temp": 0.25,
+        "wind": 0.15,
+        "swell": 0.15
       },
-      "note": "sstC band not yet researched."
+      "note": "The global 0-800 m figure would let this species score as prime habitat on a deep slope, which is wrong for a Mediterranean rocky-shore species. The narrowing is labelled 'derived' so a reader can see it is a judgement, not a measurement.",
+      "bottomTempC": {
+        "gateMin": 13.0,
+        "gateMax": 22.0,
+        "idealMin": 16.0,
+        "idealMax": 20.0,
+        "conf": "expert",
+        "src": "Expert envelope; not a cited optimum. Not required."
+      },
+      "requiredFactors": [
+        "depth"
+      ],
+      "unscorableRequirements": [
+        "Rocky substrate: it is a benthic sit-and-wait ambusher on rock, and is effectively absent from sand. No bottom-type product.",
+        "Posidonia and rhodophyte shelter: a real density driver with no habitat product in this build."
+      ],
+      "evidence": [
+        {
+          "key": "fishbase-scorpaena",
+          "citation": "FishBase (Froese & Pauly, FishBase.org) Scorpaena porcus species summary (0-800 m global bound; Mediterranean rocky habitat)",
+          "usedFor": "depth band, narrowed to the Mediterranean with the narrowing disclosed"
+        }
+      ]
     },
     {
       "id": "common_sole",
@@ -1005,23 +1371,42 @@
       ],
       "guild": "demersal",
       "depth": {
-        "gateMinM": 0,
-        "gateMaxM": 200,
-        "prefMinM": 20,
-        "prefMaxM": 80,
-        "conf": "expert"
+        "gateMinM": 1,
+        "gateMaxM": 150,
+        "prefMinM": 10,
+        "prefMaxM": 60,
+        "conf": "cited",
+        "src": "FishBase (Froese & Pauly, FishBase.org) Ref. 35388, 6302: 0-150 m, usually 10-60 m; sandy and muddy bottoms. 8-24 C, preferred 16 C (Ref. 4944, 107945)"
       },
       "weights": {
-        "sst": 0.2,
         "depth": 0.3,
-        "wind": 0.2,
-        "swell": 0.15,
-        "solunar": 0.15
+        "bottom_temp": 0.4,
+        "wind": 0.15,
+        "swell": 0.15
       },
       "unscorableRequirements": [
         "Sandy/muddy substrate: common sole is a sand-dwelling flatfish and is effectively absent from rocky ground, but the app has no bottom-type source. Substrate is not a missing FACTOR (it is not in the weights at all) but it is a real decision variable the score is blind to."
       ],
-      "note": "sstC band not yet researched. Substrate is moved to unscorableRequirements rather than left only in this note, so it reaches the API consumer as structured data instead of a caveat they have to read."
+      "note": "v1 said 0-200 m with a 20-80 m preference and no thermal band at all. This is the strongest thermal citation in the whole non-pilot set: a measured 16 C preference, so bottom temperature is a required factor here rather than a weighted extra.",
+      "bottomTempC": {
+        "gateMin": 8.0,
+        "gateMax": 24.0,
+        "idealMin": 16.0,
+        "idealMax": 16.0,
+        "conf": "cited",
+        "src": "FishBase (Froese & Pauly, FishBase.org) Ref. 4944, 107945: environmental range 8-24 C with a preferred 16 C. The 16 C preference is the one measured optimum in this profile, which is why bottom temperature is required rather than merely weighted"
+      },
+      "requiredFactors": [
+        "depth",
+        "bottom_temp"
+      ],
+      "evidence": [
+        {
+          "key": "fishbase-solea",
+          "citation": "FishBase (Froese & Pauly, FishBase.org) Solea solea species summary (0-150 m, usually 10-60 m; 8-24 C, preferred 16 C)",
+          "usedFor": "depth gate, preferred band and required bottom temperature"
+        }
+      ]
     },
     {
       "id": "grey_mullet",
@@ -1036,16 +1421,51 @@
         "gateMaxM": 30,
         "prefMinM": 0,
         "prefMaxM": 5,
-        "conf": "expert"
+        "conf": "cited",
+        "src": "FishBase (Froese & Pauly, FishBase.org) Ref. 51243: Mugil cephalus is benthopelagic; the Mediterranean nearshore fishery is a surface-to-5 m schooling fishery in lagoons, estuaries and shallow inshore. The 0-30 m gate is a derived narrowing of a benthopelagic 0-100 m+ range, and is labelled as such"
       },
       "weights": {
-        "sst": 0.2,
-        "depth": 0.3,
-        "wind": 0.2,
-        "swell": 0.1,
-        "solunar": 0.2
+        "depth": 0.45,
+        "sst": 0.25,
+        "season": 0.1,
+        "wind": 0.1,
+        "swell": 0.1
       },
-      "note": "Near-surface schooling species. Depth is the dominant factor. sstC band not yet researched."
+      "note": "The important change is not the band, it is the blind spot being named. A mullet score driven by depth and surface temperature while its defining variable is salinity is a score about the wrong thing, and the unscorableRequirements entry says so in the API response rather than leaving it implied.",
+      "sstC": {
+        "gateMin": 8.0,
+        "gateMax": 30.0,
+        "idealMin": 18.0,
+        "idealMax": 26.0,
+        "conf": "cited",
+        "src": "FishBase (Froese & Pauly, FishBase.org) Ref. 51243, 27121: euryhaline and eurythermal, tolerant of 8-30 C; the wide gate is a real physiological range, and the 18-26 C preferred band reflects the warm-season feeding aggregation rather than a strict optimum. NOT required: mullet are famously hardy and refusing them outside a narrow band would be wrong"
+      },
+      "season": {
+        "peakMonths": [
+          6,
+          7,
+          8,
+          9
+        ],
+        "closedMonths": [],
+        "conf": "expert",
+        "src": "Warm-season nearshore feeding aggregation. Expert tier: the seasonal pattern is real but was not traced to a specific Mediterranean spawning paper, and it is kept light in the weights because of that"
+      },
+      "requiredFactors": [
+        "depth"
+      ],
+      "unscorableRequirements": [
+        "Salinity is the single most important variable for this species: grey mullet is a true euryhaline andagroup the profitable fishery is in lagoons and estuaries at salinities from near-fresh to hypersaline. There is no surface salinity measurement in this build, so the most decision-relevant requirement of this species is entirely invisible to the score.",
+        "Substrate: it feeds on periphyton and benthic diatoms scraped off hard surfaces, so bottom type matters and no product resolves it.",
+        "Lagoon versus open coast: the profile cannot tell the two apart, and they are different fisheries."
+      ],
+      "evidence": [
+        {
+          "key": "fishbase-mugil",
+          "citation": "FishBase (Froese & Pauly, FishBase.org) Mugil cephalus species summary (benthopelagic; euryhaline and eurythermal)",
+          "usedFor": "guild, depth context and the wide thermal gate"
+        }
+      ]
     },
     {
       "id": "common_octopus",
@@ -1221,7 +1641,7 @@
         "prefMinM": 0,
         "prefMaxM": 100,
         "conf": "cited",
-        "src": "Eriksen et al. 2015 (FAO, Cephalopod biology and fisheries in Europe II): subtidal to 200m but most abundant in the upper 100m; shell implosion at 150-200m limits large animals. Guerra et al. 2015: preferential spawning depth 8-13m"
+        "src": "Eriksen et al. 2015 (FAO, Cephalopod biology and fisheries in Europe II): subtidal to 200 m but most abundant in the upper 100 m; shell implosion at 150-200 m limits large animals. Guerra et al. 2015: preferential spawning depth 8-13 m"
       },
       "sstC": {
         "gateMin": 10.0,
@@ -1243,18 +1663,33 @@
         "src": "Eriksen et al. 2015 (FAO): semi-continuous Mediterranean spawning with a March-June peak; Turkish coast Feb-Jun and Adriatic intensification Apr-Aug also reported. Inshore migration to spawn in spring/summer, offshore to feed in autumn/winter"
       },
       "weights": {
-        "sst": 0.25,
-        "depth": 0.2,
-        "wind": 0.15,
-        "swell": 0.15,
-        "solunar": 0.15,
-        "season": 0.1
+        "sst": 0.35,
+        "depth": 0.25,
+        "season": 0.2,
+        "wind": 0.1,
+        "swell": 0.1
       },
       "unscorableRequirements": [
-        "Spawning substrate and egg-laying habitat",
-        "Cuttlebone/egg deposition site quality"
+        "Spawning substrate and egg-laying habitat: the single most important requirement for this species, and there is no substrate product.",
+        "Cuttlebone deposition site quality, same reason.",
+        "Bottom temperature: a 10-30 C physiological limit applies to the water the animal sits in, which at these shallow depths is close enough to surface SST to be scored honestly by sst. This is the one demersal/cephalopod profile where a surface-anchored thermal gate is defensible, and it is stated rather than assumed."
       ],
-      "note": "Spawns on warm shallow grounds in early summer. The 10C floor is a real physiological limit rather than a preference artefact, so this is the one demersal/cephalopod profile where a surface-anchored thermal gate is defensible."
+      "note": "Kept its existing cited bands, which were already sound, and given the v2 treatment it was missing: an explicit required factor and an evidence list. The 10 C floor is a real physiological limit rather than a preference artefact, which is what justifies making sst required for this species and not for the demersal fishes.",
+      "requiredFactors": [
+        "sst"
+      ],
+      "evidence": [
+        {
+          "key": "eriksen2015",
+          "citation": "Eriksen et al. 2015, FAO - Cephalopod biology and fisheries in Europe II (10-30 C temperature limits; semi-continuous Mediterranean spawning, Mar-Jun peak)",
+          "usedFor": "thermal gate, depth band and spawning season"
+        },
+        {
+          "key": "guerra2015",
+          "citation": "Guerra et al. 2015 - preferential cuttlefish spawning depth 8-13 m",
+          "usedFor": "spawning depth in the depth note"
+        }
+      ]
     },
     {
       "id": "deep_rose_shrimp",
@@ -1269,16 +1704,49 @@
         "gateMaxM": 1000,
         "prefMinM": 450,
         "prefMaxM": 800,
-        "conf": "expert"
+        "conf": "expert",
+        "src": "Slope/deep-shelf band for Parapenaeus longirostris. Retained at expert tier: the depth envelope is the one thing about this species that is not seriously in doubt, but the exact numbers are not cited here and are not presented as if they were"
       },
       "weights": {
-        "sst": 0.2,
-        "depth": 0.4,
+        "bottom_temp": 0.3,
+        "bottom_salinity": 0.25,
+        "depth": 0.25,
         "wind": 0.1,
-        "swell": 0.15,
-        "solunar": 0.15
+        "swell": 0.1
       },
-      "note": "DEPTH-BLOCKED at every existing Mediterranean spot (all 72 are 15-30m). Returns unavailable until deep/offshore spots exist. This is intended behaviour, not a bug."
+      "note": "DEPTH-BLOCKED at every existing Mediterranean spot (all are 15-30 m), and now also salinity- and temperature-gated on the Levantine Intermediate Water it actually belongs to. Returning unavailable until deep/offshore spots exist is intended behaviour, not a bug. This is the clearest case in the roster for requiring three factors: the species is defined by a specific water mass, and a score that cannot see that water mass is not a red shrimp score.",
+      "bottomTempC": {
+        "gateMin": 12.5,
+        "gateMax": 15.0,
+        "idealMin": 13.0,
+        "idealMax": 14.0,
+        "conf": "derived",
+        "src": "Levantine Intermediate Water is a 12.5-15 C layer, and the red shrimp association is with that water mass rather than with a species-specific optimum. Marked 'derived' because it is a water-mass characteristic used as a habitat proxy, which is a weaker claim than a measured preference. REQUIRED, because the water mass IS the habitat here"
+      },
+      "bottomSalinityPsu": {
+        "gateMin": 38.1,
+        "gateMax": 38.6,
+        "idealMin": 38.2,
+        "idealMax": 38.5,
+        "conf": "derived",
+        "src": "Red shrimp are associated with the salinified Levantine Intermediate Water, 38.1-38.5 psu in the cited association. Derived rather than cited because it is a water-mass range applied as a species band. REQUIRED: outside this salinity the association does not hold, and scoring it without the check would rank Atlantic water at 36 psu as prime"
+      },
+      "requiredFactors": [
+        "depth",
+        "bottom_temp",
+        "bottom_salinity"
+      ],
+      "unscorableRequirements": [
+        "Sediment type: Aristaeomorph shrimp are associated with specific muddy/sandy substrates and the trawl grounds are substrate-defined. No bottom-type product.",
+        "Trawling pressure and habitat structure: the fishery is a deep trawl fishery and the grounds are not equivalent to the water-mass definition above."
+      ],
+      "evidence": [
+        {
+          "key": "liw-water-mass",
+          "citation": "Levantine Intermediate Water characterisation (12.5-15 C, 38.1-38.5 psu) as applied to the Mediterranean red shrimp association",
+          "usedFor": "the derived bottom temperature and bottom salinity bands, both labelled derived"
+        }
+      ]
     },
     {
       "id": "red_shrimp",

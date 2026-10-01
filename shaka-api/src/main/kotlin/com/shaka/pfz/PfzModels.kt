@@ -28,6 +28,20 @@ enum class FactorConfidence {
     /** Traceable to a published source; see the `src` field. */
     @SerialName("cited") CITED,
 
+    /**
+     * Arithmetic we performed over real measurements, rather than a number
+     * anyone published.
+     *
+     * Sea surface height anomaly is `zos_daily - zos_monthly_mean` of the same
+     * Copernicus product, because that product's static dataset carries no mean
+     * dynamic topography. A band written against such a value is better founded
+     * than an [EXPERT] guess — every input is a measurement — but it is still not
+     * a citation, so it is reported as a distinct tier rather than being passed
+     * off as one. It counts as low confidence: [PfzEngine] only treats [CITED] as
+     * fully trusted.
+     */
+    @SerialName("derived") DERIVED,
+
     /** Standard fisheries knowledge, not traceable to a specific citation. */
     @SerialName("expert") EXPERT,
 
@@ -526,19 +540,27 @@ data class ResolvedProfile(
      * data" would tell the caller we are blind to something that was never part
      * of the question.
      *
-     * Spatial gradients, wind, swell, solunar and depth are always evaluable:
-     * they are either real measurements of the conditions the app models, or a
-     * shared operational envelope, so a species that genuinely weights one
-     * reports its data gap instead of quietly losing the weight budget.
+     * Spatial gradients, wind, swell and solunar are always evaluable: they are
+     * either real measurements of the conditions the app models, or a shared
+     * operational envelope, so a species that genuinely weights one reports its
+     * data gap instead of quietly losing the weight budget.
+     *
+     * [PfzFactor.DEPTH] is the one exception, and deliberately so. For a
+     * [DepthScope.WATER_COLUMN] species the depth band describes depth below the
+     * surface, so seafloor depth is not a requirement at all. Reporting it as a
+     * missing factor both misleads the caller — it reads as "we lack depth data"
+     * for a species that does not care about the seabed — and lowers confidence,
+     * because the discarded weight shrinks the measured fraction of the budget.
      */
     fun definesFactor(factor: String): Boolean = when (factor) {
         PfzFactor.SST -> sstC != null
         PfzFactor.CHL -> chlMgM3 != null
         // Always evaluable, exactly as in v1: a species that genuinely weights a
-        // spatial gradient must report the data gap rather than lose the weight.
+        // spatial gradient must report its data gap rather than lose the weight.
         PfzFactor.CHLA_GRADIENT, PfzFactor.SST_GRADIENT, PfzFactor.SST_ANOMALY,
-        PfzFactor.DEPTH, PfzFactor.DEPTH_GRADIENT,
+        PfzFactor.DEPTH_GRADIENT,
         PfzFactor.SOLUNAR, PfzFactor.WIND, PfzFactor.SWELL -> true
+        PfzFactor.DEPTH -> depth.scope != DepthScope.WATER_COLUMN
         PfzFactor.CURRENT -> oceanCurrentKmhMax != null
         PfzFactor.BOTTOM_TEMP -> bottomTempC != null
         PfzFactor.BOTTOM_SALINITY -> bottomSalinityPsu != null

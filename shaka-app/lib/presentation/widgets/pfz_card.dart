@@ -91,9 +91,16 @@ class PfzCard extends StatelessWidget {
               icon: Icons.help_outline,
               color: AppColors.warning,
               title: '${data.insufficient.length} species not enough data',
-              // Deliberately vague in the summary; each row carries its own list.
+              // A count alone is not an answer: the user cannot tell whether the
+              // app had nothing, or had everything except the one measurement
+              // this species is written against. Name the species, the model it
+              // would have been scored under, and the measurement that is
+              // missing, so "no score" reads as a gap rather than a verdict.
               detail: 'Habitat looks plausible but we lack the measurements '
                   'to say. Not a zero score.',
+              children: [
+                for (final s in data.insufficient) _RefusedRow(result: s),
+              ],
             ),
           ],
           if (data.unavailable.isNotEmpty) ...[
@@ -155,16 +162,9 @@ class _SpeciesRow extends StatelessWidget {
   final PfzSpeciesResult result;
   const _SpeciesRow({required this.result});
 
-  /// e.g. "feeding · large fish · central_med" — only the parts the backend
+  /// e.g. "feeding · large fish · central med" — only the parts the backend
   /// actually applied, so the row never implies a mode it was not scored under.
-  String? get _contextLabel {
-    final parts = <String>[
-      if (result.mode != null) result.mode!.replaceAll('_', ' '),
-      if (result.sizeClass != null) '${result.sizeClass} fish',
-      if (result.region != null) result.region!.replaceAll('_', ' '),
-    ];
-    return parts.isEmpty ? null : parts.join(' · ');
-  }
+  String? get _contextLabel => _contextLabelOf(result);
 
   @override
   Widget build(BuildContext context) {
@@ -376,11 +376,13 @@ class _SectionNote extends StatelessWidget {
   final Color color;
   final String title;
   final String detail;
+  final List<Widget> children;
   const _SectionNote({
     required this.icon,
     required this.color,
     required this.title,
     required this.detail,
+    this.children = const [],
   });
 
   @override
@@ -400,12 +402,89 @@ class _SectionNote extends StatelessWidget {
               Text(detail,
                   style: const TextStyle(
                       color: AppColors.darkTextHint, fontSize: 10.5, height: 1.35)),
+              if (children.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                ...children,
+              ],
             ],
           ),
         ),
       ],
     );
   }
+}
+
+/// A species that got no number, named with the model it would have been scored
+/// under and the measurement that stopped it.
+///
+/// The mode and size class are the point: "bluefin, feeding, large fish" and
+/// "bluefin, spawning" are different models, and a user refused one deserves to
+/// know which one refused them rather than being told only that a score is
+/// unavailable.
+class _RefusedRow extends StatelessWidget {
+  final PfzSpeciesResult result;
+  const _RefusedRow({required this.result});
+
+  @override
+  Widget build(BuildContext context) {
+    final ctx = _contextLabelOf(result);
+    // Blockers arrive as full sentences, which is too long for a summary line,
+    // so take the measurement out of the first one: the engine words them
+    // "<factor> is required to score ...".
+    final reason = result.blockers.isEmpty
+        ? null
+        : result.blockers.first.split(' is required ').first;
+    final extra = result.blockers.length - (reason != null ? 1 : 0);
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            [
+              result.commonName,
+              if (ctx != null) ctx,
+            ].join(' · '),
+            style: const TextStyle(
+                color: AppColors.darkTextMuted,
+                fontSize: 10.5,
+                fontWeight: FontWeight.w500),
+          ),
+          if (reason != null)
+            Text(
+              extra > 0
+                  ? 'missing: $reason (+$extra more)'
+                  : 'missing: $reason',
+              style: const TextStyle(
+                  color: AppColors.darkTextHint,
+                  fontSize: 10,
+                  height: 1.3),
+            ),
+          if (result.note != null)
+            Text(
+              result.note!,
+              style: const TextStyle(
+                  color: AppColors.darkTextHint,
+                  fontSize: 10,
+                  fontStyle: FontStyle.italic,
+                  height: 1.3),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Shared by the scored and refused rows so both describe the same model the
+/// same way: e.g. "feeding · large fish · central med".
+String? _contextLabelOf(PfzSpeciesResult result) {
+  final parts = <String>[
+    if (result.mode != null) result.mode!.replaceAll('_', ' '),
+    if (result.sizeClass != null) '${result.sizeClass} fish',
+    if (result.region != null) result.region!.replaceAll('_', ' '),
+  ];
+  return parts.isEmpty ? null : parts.join(' · ');
 }
 
 class _Shell extends StatelessWidget {

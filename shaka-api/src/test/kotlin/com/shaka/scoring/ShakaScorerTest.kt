@@ -61,4 +61,27 @@ class ShakaScorerTest {
             "missing-data confidence ${missing.confidence} should be < ${full.confidence}")
         assertTrue(missing.confidence >= 10)
     }
+
+    /**
+     * A client that sends `?date=` means "no date chosen", not "parse the empty
+     * string". This threw DateTimeParseException out of getSpotDetail and took
+     * the whole spot-detail response down with a 500, so a missing date cost the
+     * user the entire screen rather than one field.
+     */
+    @Test
+    fun `blank date is treated as today rather than throwing`() {
+        assertEquals(95, ShakaScorer.confidenceForDate(""))
+        assertEquals(95, ShakaScorer.confidenceForDate("   "))
+    }
+
+    @Test
+    fun `unparseable date is treated as today rather than throwing`() {
+        assertEquals(95, ShakaScorer.confidenceForDate("not-a-date"))
+    }
+
+    @Test
+    fun `a real date still scores its own confidence`() {
+        val tomorrow = LocalDate.now().plusDays(1).toString()
+        assertEquals(90, ShakaScorer.confidenceForDate(tomorrow))
+    }
 }

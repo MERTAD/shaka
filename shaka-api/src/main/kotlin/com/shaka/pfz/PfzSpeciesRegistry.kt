@@ -104,6 +104,14 @@ object PfzSpeciesRegistry {
         if (p.depth.scope == DepthScope.WATER_COLUMN && !p.guild.contains("pelagic")) {
             problems += "water_column depth scope is only valid for pelagic guilds (guild='${p.guild}')"
         }
+        // A water_column species does not DEFINE the depth factor, so a required
+        // 'depth' would never appear in the engine's factor outcomes and the
+        // "unmet requirement" check would pass it silently. That is exactly the
+        // kind of quietly-wrong roster entry this validator exists to reject.
+        if (p.depth.scope == DepthScope.WATER_COLUMN && PfzFactor.DEPTH in p.requiredFactors) {
+            problems += "water_column depth scope cannot require the depth factor: " +
+                "seafloor depth is not a constraint for this species"
+        }
 
         validateBand(p.sstC, "sstC", problems)
         validateBand(p.chlMgM3, "chlMgM3", problems)

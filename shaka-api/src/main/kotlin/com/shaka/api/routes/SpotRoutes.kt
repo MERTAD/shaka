@@ -353,7 +353,7 @@ fun Application.configureRouting() {
             get("/spots/batch") {
                 val ids = call.parameters["ids"]
                     ?: return@get call.respond(HttpStatusCode.BadRequest, mapOf("error" to "ids required (comma-separated)"))
-                val date = call.parameters["date"] ?: java.time.LocalDate.now().toString()
+                val date = call.parameters["date"]?.takeIf { it.isNotBlank() } ?: java.time.LocalDate.now().toString()
                 
                 val spotIds = ids.split(",").map { it.trim() }.filter { it.isNotEmpty() }
                 if (spotIds.isEmpty()) {
@@ -422,7 +422,11 @@ fun Application.configureRouting() {
             get("/spots/{id}") {
                 val spotId = call.parameters["id"]
                     ?: return@get call.respond(HttpStatusCode.BadRequest, mapOf("error" to "id required"))
-                val date = call.parameters["date"] ?: java.time.LocalDate.now().toString()
+                // An absent date and a blank one mean the same thing: the caller
+                // never chose. `?:` only covers absent, and a client that sends
+                // `?date=` would otherwise hand "" to the scorer.
+                val date = call.parameters["date"]?.takeIf { it.isNotBlank() }
+                    ?: java.time.LocalDate.now().toString()
 
                 call.respondWithDeadline {
                     val spot = spotService.getSpotDetail(spotId, date)
@@ -507,7 +511,7 @@ fun Application.configureRouting() {
             get("/spots/{id}/pfz") {
                 val spotId = call.parameters["id"]
                     ?: return@get call.respond(HttpStatusCode.BadRequest, mapOf("error" to "id required"))
-                val date = call.parameters["date"] ?: java.time.LocalDate.now().toString()
+                val date = call.parameters["date"]?.takeIf { it.isNotBlank() } ?: java.time.LocalDate.now().toString()
 
                 when (val result = pfzService.evaluateWithGrid(
                     spotId, date,
@@ -544,7 +548,7 @@ fun Application.configureRouting() {
                     ?: return@get call.respond(HttpStatusCode.BadRequest, mapOf("error" to "lat required"))
                 val lon = call.request.queryParameters["lon"]?.toDoubleOrNull()
                     ?: return@get call.respond(HttpStatusCode.BadRequest, mapOf("error" to "lon required"))
-                val date = call.request.queryParameters["date"] ?: java.time.LocalDate.now().toString()
+                val date = call.request.queryParameters["date"]?.takeIf { it.isNotBlank() } ?: java.time.LocalDate.now().toString()
                 val species = call.request.queryParameters["species"]
                     ?: return@get call.respond(HttpStatusCode.BadRequest, mapOf("error" to "species required"))
 
@@ -598,7 +602,7 @@ fun Application.configureRouting() {
             get("/spots/{id}/realtime-clarity") {
                 val spotId = call.parameters["id"]
                     ?: return@get call.respond(HttpStatusCode.BadRequest, mapOf("error" to "id required"))
-                val date = call.parameters["date"] ?: java.time.LocalDate.now().toString()
+                val date = call.parameters["date"]?.takeIf { it.isNotBlank() } ?: java.time.LocalDate.now().toString()
 
                 // Check if direct Sentinel-3 access is available
                 if (!copernicusClient.isDirectAccessAvailable()) {
@@ -1536,7 +1540,7 @@ fun Application.configureRouting() {
                         mapOf("error" to "Spot ID required")
                     )
                 
-                val date = call.parameters["date"] ?: java.time.LocalDate.now().toString()
+                val date = call.parameters["date"]?.takeIf { it.isNotBlank() } ?: java.time.LocalDate.now().toString()
                 
                 // Find the user spot
                 val userSpot = userSpotRepository.findByIdAndDevice(spotId, deviceId)

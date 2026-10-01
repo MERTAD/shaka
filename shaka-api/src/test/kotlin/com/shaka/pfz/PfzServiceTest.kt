@@ -103,12 +103,20 @@ class PfzServiceTest {
         }
 
         // And every real measurement gap must be named.
+        val bluefin = result_of(response, "bluefin_tuna")
         assertTrue(
-            result_of(response, "bluefin_tuna").missingFactors.containsAll(
-                listOf(PfzFactor.DEPTH, PfzFactor.SST, PfzFactor.CHL, PfzFactor.WIND, PfzFactor.SWELL)
+            bluefin.missingFactors.containsAll(
+                listOf(PfzFactor.SST, PfzFactor.CHL, PfzFactor.WIND, PfzFactor.SWELL)
             ),
-            "bluefin must report every unmeasured factor, got " +
-                "${result_of(response, "bluefin_tuna").missingFactors}"
+            "bluefin must report every unmeasured factor, got ${bluefin.missingFactors}"
+        )
+        // Bathymetry is not one of them. Bluefin's depth band describes the water
+        // column, not the seabed, so naming it as missing would claim a data
+        // shortfall that does not exist — and it would cost the species confidence
+        // for a gap it never had.
+        assertFalse(
+            bluefin.missingFactors.contains(PfzFactor.DEPTH),
+            "bluefin must not report bathymetry as missing, got ${bluefin.missingFactors}"
         )
     }
 

@@ -261,10 +261,14 @@ class PfzEngineTest {
 
     @Test
     fun `surface pelagics are not depth-gated over a deep basin`() {
-        // Bluefin, little tunny and swordfish live in the top layer and hunt
+        // Bluefin, little tunny, swordfish, the two clupeiform-adjacent pelagics
+        // and the horse mackerel / chub mackerel live in the top layer and range
         // across basins with >2000 m of bottom depth. Bathymetry must never gate
         // them: a 1500 m zone is still valid habitat.
-        for (id in listOf("bluefin_tuna", "little_tunny", "swordfish")) {
+        for (id in listOf(
+            "bluefin_tuna", "little_tunny", "swordfish",
+            "sardinella", "anchovy", "horse_mackerel", "scomber"
+        )) {
             val result = PfzEngine.evaluateSpecies(profile(id), goodObs(depthM = 1500.0))
             assertEquals(PfzStatus.SCOREABLE, result.status, "$id must score over deep water")
             assertNotNull(result.pfz, "$id must carry a numeric score over deep water")
@@ -272,9 +276,15 @@ class PfzEngineTest {
                 result.blockers.any { it.startsWith("depth:") },
                 "$id must not report a depth blocker, got ${result.blockers}"
             )
-            assertTrue(
+            // Bathymetry is not a gap for these species: their band describes the
+            // water column, not the seabed, so there is nothing to be missing.
+            assertFalse(
                 result.missingFactors.contains(PfzFactor.DEPTH),
-                "$id must report bathymetry as unused, got ${result.missingFactors}"
+                "$id must not report bathymetry as a missing factor, got ${result.missingFactors}"
+            )
+            assertTrue(
+                result.factors.none { it.factor == PfzFactor.DEPTH },
+                "$id must not score bathymetry, got ${result.factors.map { it.factor }}"
             )
         }
     }
@@ -293,11 +303,89 @@ class PfzEngineTest {
 
     @Test
     fun `only the surface pelagics declare the water_column scope`() {
-        for (id in listOf("bluefin_tuna", "little_tunny", "swordfish")) {
+        for (id in listOf(
+            "bluefin_tuna", "little_tunny", "swordfish",
+            "sardinella", "anchovy", "horse_mackerel", "scomber"
+        )) {
             assertEquals(DepthScope.WATER_COLUMN, profile(id).depth.scope, "$id scope")
         }
-        for (id in listOf("sardine", "anchovy", "horse_mackerel", "common_sole", "deep_rose_shrimp")) {
+        for (id in listOf(
+            "sardine", "common_sole", "deep_rose_shrimp", "european_hake", "red_shrimp",
+            "common_dentex", "common_pandora", "white_seabream", "gilthead_seabream",
+            "dusky_grouper", "white_grouper", "european_seabass", "bogue",
+            "red_scorpiofish", "red_mullet", "striped_red_mullet",
+            "european_conger", "grey_mullet", "common_cuttlefish", "common_octopus"
+        )) {
             assertEquals(DepthScope.BATHYMETRY, profile(id).depth.scope, "$id scope")
+        }
+    }
+
+    /**
+     * A water_column species is not missing a depth measurement.
+     *
+     * Its band describes depth below the surface, so seafloor depth is not a
+     * requirement for it. Reporting depth as a missing factor read as "we lack
+     * depth data" for a species that does not care about the seabed, and because
+     * the discarded weight shrank the measured fraction of the weight budget it
+     * also depressed confidence for a gap that does not exist.
+     */
+    @Test
+    fun `water_column species never report a missing depth factor`() {
+        for (id in listOf("bluefin_tuna", "little_tunny", "swordfish", "sardinella")) {
+            val result = PfzEngine.evaluateSpecies(profile(id), goodObs())
+            assertFalse(
+                "depth" in result.missingFactors,
+                "$id reported a missing depth factor: ${result.missingFactors}"
+            )
+        }
+    }
+
+    /**
+     * No weight budget may leak.
+     *
+     * A profile that weights a factor the engine cannot evaluate loses that
+     * weight from the budget, so the reported factor weights no longer account
+     * for the whole score. The demersal profiles were written against
+     * bottom-temperature and depth bands and must spend their entire budget on
+     * factors they actually define.
+     */
+    @Test
+    fun `a water_column species spends its whole weight budget`() {
+        for (id in listOf(
+            "little_tunny", "swordfish", "sardinella", "anchovy",
+            "horse_mackerel", "scomber"
+        )) {
+            val result = PfzEngine.evaluateSpecies(profile(id), goodObs())
+            assertEquals(PfzStatus.SCOREABLE, result.status, "$id status ${result.blockers}")
+            assertTrue(
+                result.factors.none { it.factor == "depth" },
+                "$id scored the depth factor"
+            )
+            val total = result.factors.sumOf { it.weight }
+            assertTrue(abs(total - 1.0) < 0.001, "$id factor weights sum to $total")
+        }
+    }
+
+    /**
+     * The roster must never ask a water_column species for a depth measurement.
+     *
+     * Such a profile does not define the depth factor, so the requirement could
+     * never be reported unmet and would be satisfied silently. [PfzSpeciesRegistry]
+     * rejects this at load time; this asserts the shipped roster is clean.
+     */
+    @Test
+    fun `no water_column species requires the depth factor`() {
+        for (p in PfzSpeciesRegistry.all()) {
+            if (p.depth.scope != DepthScope.WATER_COLUMN) continue
+            assertTrue(
+                "depth" !in p.requiredFactors,
+                "${p.id} declares water_column scope but requires depth"
+            )
+            assertTrue(
+                (p.weights["depth"] ?: 0.0) == 0.0,
+                "${p.id} declares water_column scope but weights depth " +
+                    "${p.weights["depth"]}"
+            )
         }
     }
 
@@ -691,15 +779,22 @@ class PfzEngineTest {
         assertEquals(PfzStatus.UNAVAILABLE, tooWarm.status)
         assertTrue(tooWarm.blockers.any { it.contains("bottom_temp") }, "got ${tooWarm.blockers}")
 
-        // The two mullets have no cited bottom band yet, so they must say so
-        // rather than quietly inherit the hake's.
+        // The two mullets now carry their OWN bottom band rather than having no
+        // band at all. The regression this still guards is inheritance: they must
+        // not take the hake's CITED numbers, and must not be promoted to a surface
+        // sstC gate, because a slope reading still cannot come from the surface.
         for (id in listOf("red_mullet", "striped_red_mullet")) {
             val p = profile(id)
             assertNull(p.sstC, "$id must not define a surface sstC band")
-            assertNull(p.bottomTempC, "$id has no cited bottom band")
+            assertNotNull(p.bottomTempC, "$id must carry its own bottom band")
+            assertEquals(
+                FactorConfidence.EXPERT,
+                p.bottomTempC!!.conf,
+                "$id must not present an uncited bottom envelope as cited"
+            )
             assertTrue(
-                p.unscorableRequirements.any { it.contains("Bottom temperature") },
-                "$id must disclose the unscored bottom-temperature requirement"
+                p.bottomTempC!!.gateMin > hake.bottomTempC!!.gateMin,
+                "$id must not inherit the hake's cited bottom band"
             )
         }
     }

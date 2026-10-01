@@ -24,7 +24,14 @@ object ShakaScorer {
      * Same-day forecasts are most reliable, 30-day out are least.
      */
     fun confidenceForDate(targetDate: String): Int {
-        val target = LocalDate.parse(targetDate)
+        // A blank date means the caller did not choose one. Defaulting to today
+        // is the honest reading of "now" and keeps the whole spot-detail
+        // response alive; LocalDate.parse("") would otherwise throw and take
+        // the entire request down with a 500, which is a far worse answer than
+        // a mid-range confidence.
+        val target = targetDate.takeIf { it.isNotBlank() }
+            ?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
+            ?: LocalDate.now()
         val today = LocalDate.now()
         val daysOut = ChronoUnit.DAYS.between(today, target).toInt()
 

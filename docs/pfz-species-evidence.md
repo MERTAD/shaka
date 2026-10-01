@@ -249,14 +249,147 @@ The most spatially restricted species in the pilot, and the clearest case where 
 | 30-day SST series | bluefin `sst_warming` | One extra cached daily fetch per box. Feasible. |
 | Monthly SSH climatology | bluefin `ssh_anomaly` | One extra cached monthly fetch per box. Feasible. |
 
-## Species not yet covered (22 remaining)
+## 6. Round sardinella — *Sardinella aurita*
 
-`little_tunny`, `swordfish`, `sardinella` (has partial region work), `anchovy`, `horse_mackerel`, `scomber`, `bogue`, `common_dentex`, `common_pandora`, `dusky_grouper`, `white_grouper`, `european_conger`, `european_seabass`, `gilthead_seabream`, `white_seabream`, `red_mullet`, `striped_red_mullet`, `red_scorpiofish`, `common_sole`, `grey_mullet`, `common_cuttlefish`, `deep_rose_shrimp`.
+The first `water_column` migration in the v1 group, and the clearest demonstration of why the scope distinction matters. v1 scored it on a 20–27 °C surface band with no season term and an untraced depth band.
 
-Directional evidence gathered but not yet normalised into rows:
-- **Small pelagics generally** (Schismenou 2014, Front. Mar. Sci. 2017 4:230): SST alone is insufficient; UML/BL temperature and salinity, bathymetry and stratification index all matter, and anchovy and sardine differ from each other as much as either differs from mackerel.
-- **Horse mackerel** (Front. Mar. Sci. 2017 4:230): bathymetry, SST, sea level anomaly and zonal absolute geostrophic velocity — a different variable set from sardine.
-- **Cephalopods generally**: bottom temperature and salinity, surface DO and CHL, hard substrate.
-- **Demersal nursery** (PLOS ONE 2014): shelf-break structure plus bottom temperature, salinity and current — the same shape as the hake row.
+| Variable | Value | Tier | Source |
+|---|---|---|---|
+| Thermal range | 18–25 °C, prefers < 24 °C | cited | FishBase species summary (Refs 2945, 27121): cold-water sardinella, 18–25 °C |
+| Depth | 0–350 m, usually 10–80 m; retreats below the thermocline to 200–300 m in summer | cited | FishBase (Ref 188) |
+| Depth scope | `water_column` | cited | Band is a below-surface range, so a coastal spot's bathymetry says nothing about where the school is |
+| Season | warm-month spawning, August peak | cited | Fishes of the Northeastern Atlantic and the Mediterranean species account; Mediterranean landings early summer to late autumn |
+| Prey | copepods, larval mysids | cited | FishBase (Refs 188, 86940) |
+| Salinity | prefers clear water, ≳ 34 psu | cited | FishBase species summary |
 
-These will be added species by species, applying the same table structure. No guild-level defaults.
+**Required factors:** `sst`.
+
+**Thermal gate widened to 27 °C at the top, deliberately.** The cited figure is 25 °C, but Mediterranean summer surface water regularly exceeds that, and a hard 25 °C ceiling would report a confident absence in exactly the season and basin where the species is most abundant. The gate is a habitat limit, not a citation transcribed literally.
+
+**Unscorable:** zooplankton (productivity means prey density, not chlorophyll — the CHL term is a proxy for a variable the score cannot see), salinity, and the Black Sea, where the species is listed but does not spawn. The Black Sea is excluded from region resolution, which is what keeps the single band honest.
+
+---
+
+## 7. European anchovy — *Engraulis encrasicolus*
+
+Kept structurally close to sardinella so the pair is comparable in the UI, but the two are **not** interchangeable: their season bands are near-opposite by design.
+
+| Variable | Value | Tier | Source |
+|---|---|---|---|
+| Season | spring–summer spawning, the mirror image of autumn-winter sardine | cited | Palomera et al. 2007, Mediterranean sardine and anchovy spawning seasons and SST preferences |
+| Thermal band | 14–26 °C | derived | Assembled from the spring temperature-rise spawning trigger and the seasonal range; not a single measured envelope |
+| Depth | continental-shelf neritic | expert | No separately quantified Mediterranean depth envelope was found; marked honestly rather than cited |
+| Prey | zooplankton | cited | Planktivore |
+| Freshwater input | Rhône and Ebro plume influence | cited | Western Mediterranean anchovy fishery is closely tied to river-influenced water |
+
+**Required factors:** `sst`.
+
+**Unscorable:** zooplankton prey density, and river/plume input. Both are named rather than approximated.
+
+---
+
+## 8. Horse mackerel — *Trachurus trachurus* / 9. Chub mackerel — *Scomber scombrus*
+
+Both neritic-pelagic and both closer to sardine than to the demersals, but neither has a usable Mediterranean SST envelope in the sources consulted. Grouped because they share the same structure and the same honest weakness.
+
+| Variable | Horse mackerel | Chub mackerel | Tier | Source |
+|---|---|---|---|---|
+| Depth | 0–300 m (narrowed from 0–1050 m) | 0–300 m, 20–150 m preferred | derived / expert | FishBase Ref 54256 gives *T. trachurus* 0–1050 m, usually 100–200 m for the eastern Atlantic — a demersal-juvenile and overwintering envelope, not a Mediterranean near-surface one |
+| SST | 12–24 °C, optimum 15–21 °C | 12–24 °C, optimum 15–21 °C | expert | Temperate range for the guild. No measured Mediterranean band found for either |
+| CHL | 0.05–6 mg/m³ | 0.05–6 mg/m³ | expert | Planktivore; not required |
+
+**Required factors:** `sst` for both.
+
+**The cited 0–1050 m figure was left out on purpose.** Transcribing it would make a 1000 m slope look like prime ground for a species that is pelagic as an adult. The gate is narrowed and labelled `derived`.
+
+**Unscorable:** zooplankton prey density, and the demersal-juvenile phase (juveniles hold at 100–200 m in the Atlantic — a genuinely different habitat from the pelagic adult, and this build has no life-stage input).
+
+**These are the two profiles in the roster where an `expert` tier is doing the most work.** Inventing a crisp SST band for each would be easy and would be the failure mode this matrix exists to prevent, so the weaker confidence tier is recorded and surfaces in `lowConfidenceFactors`.
+
+---
+
+## 10–20. Demersal shelf species — bottom temperature, not SST
+
+Nine species migrated together because they share one design decision: **a demersal fish is scored on bottom temperature, not surface SST.** The hake pilot proved that scoring a bottom-dweller off a surface reading produces a confident wrong number, and `bottomT` is now a real measurement.
+
+| Species | Depth (gate / preferred) | Depth tier | Notes |
+|---|---|---|---|
+| *Boops boops* (bogue) | 0–350 / 0–100 m | cited | FishBase Ref 26999. **Requires nothing** — the cited range is far wider than the shelf, so a depth requirement would mostly assert "a 30 m spot is fine" |
+| *Dentex dentex* (common dentex) | 1–200 / 15–50 m | cited | FishBase Refs 3688, 54220; hard rock/rubble bottoms (Ref 9987) |
+| *Pagellus erythrinus* (common pandora) | 10–300 / 20–100 m | cited | FishBase Ref 4781; protogynous |
+| *Diplodus sargus* (white seabream) | 1–50 / 1–30 m | cited | FishBase Refs 12460, 13780; euryhaline |
+| *Sparus aurata* (gilthead) | 1–150 / 1–30 m | cited | FishBase Refs 35388, 54890 |
+| *E. marginatus* (dusky grouper) | 5–300 / 5–50 m | cited | FishBase Refs 27000, 5222; reef-associated |
+| *E. aeneus* (white grouper) | 20–200 / 30–150 m | cited | FishBase Ref 3589; rock, mud and sand; protogynous; spawns Jun–Jul |
+| *Dicentrarchus labrax* (European seabass) | 1–100 / 1–30 m | cited | FishBase Refs 9987, 54221; **8–24 °C is required** (Ref 4944) |
+| *Scorpaena porcus* (red scorpiofish) | 1–200 / 1–50 m | derived | Global bound is 0–800 m (Ref 4570); narrowed to the Mediterranean rocky shore, and the narrowing is labelled |
+| *Mullus surmuletus* (red mullet) | 5–100 / 5–60 m | cited | FishBase Refs 07313, 56504; spawns May–Jul (Ref 4845) |
+| *Mullus barbatus* (striped red mullet) | 10–328 / 50–250 m | cited | FishBase Refs 56504, 07313; separate deep-water eastern Ionian population |
+| *Solea solea* (common sole) | 1–150 / 10–60 m | cited | FishBase Refs 35388, 6302; **8–24 °C with a measured 16 °C optimum (Refs 4944, 107945)** |
+| *Conger conger* (European conger) | 30–500 / 100–400 m | derived | Med 0–500 m, to 1170 m on migration (Ref 51243); the 30 m floor is a disclosed judgement |
+
+**Required factors:** `depth` for all except bogue; `depth` + `bottom_temp` for seabass and sole; `depth` + `bottom_temp` + `bottom_salinity` for red shrimp (§5).
+
+**Bottom-temperature bands are `expert` except for the two species with a cited measured envelope.** Seabass (8–24 °C) and sole (8–24 °C, optimum 16 °C) have published thermal limits, so bottom temperature is a **required** factor for them. For the other demersals the bottom band is a weighted expert envelope, not required, so an unmeasured bottom temperature degrades confidence rather than refusing the species outright. Sole is the only profile in the whole non-pilot set with a measured thermal optimum, which is why its bottom temperature carries the dominant weight.
+
+**Five v1 depth bands were wrong and were corrected against the source rather than carried forward.** Dentex (20–300 m → 1–200 m), white seabream (0–200 → 0–50 m), dusky grouper (preferred 20–80 m, which sat below the usual <50 m), white grouper (5–250 → 20–200 m) and red mullet (preferred 28–200 m, which sat almost entirely in water the cited 5–60 m main range excludes) all admitted depths the species does not occupy or excluded depths it does. In the red mullet case the v1 preferred band was wrong *for its own cited habitat*.
+
+**Unscorable, uniformly:** substrate. Bogue is named differently — it is primarily a **forage** species, so its real habitat is the prey field, and the score honestly describes where bogue *can* live rather than where they will be feeding.
+
+---
+
+## 21–23. Inshore, cephalopod and deep crustacean
+
+| Species | Depth | Thermal | Season | Tier notes |
+|---|---|---|---|---|
+| *Mugil cephalus* (grey mullet) | 0–30 / 0–5 m | 8–30 °C, **not required** | warm-season aggregation, expert | Euryhaline and eurythermal (FishBase Ref 51243, 27121). The important change is the blind spot, not the band — see below |
+| *Sepia officinalis* (common cuttlefish) | 0–150 / 0–100 m | 10–30 °C, **required** | Mar–Jun peak, cited | Eriksen et al. 2015 (FAO); Guerra et al. 2015 for 8–13 m spawning depth. Kept its existing cited bands and gained the v2 treatment it was missing |
+| *Parapenaeus longirostris* (deep rose shrimp) | 400–1000 / 450–800 m | 12.5–15 °C + 38.1–38.6 psu, **both required** | — | LIW water-mass association, `derived`. Depth-blocked at every existing Mediterranean spot, by design |
+
+**Grey mullet: a score about the wrong thing, and it now says so.** A mullet score driven by depth and surface temperature while its single defining variable is salinity is a score about the wrong thing. Grey mullet is a true euryhaline and the profitable fishery is in lagoons and estuaries from near-fresh to hypersaline, and there is no surface salinity measurement in this build. That entry is in `unscorableRequirements`, so the API response says it rather than leaving it implied. The wide 8–30 °C gate is a real physiological range and is deliberately **not** required: refusing a hardy species outside a narrow band would be wrong.
+
+**Common sole has the strongest thermal citation in the non-pilot set** — a measured 16 °C optimum — which is why bottom temperature is required rather than weighted. Substrate is not a missing *factor* (it carries no weight at all) but it is a real decision variable the score is blind to, and it is recorded as such.
+
+**Cuttlefish is the one demersal/cephalopod profile where a surface-anchored thermal gate is defensible**, because a cephalopod at 0–100 m sits in water close enough to the surface that SST is a fair proxy — stated in the profile rather than assumed.
+
+**Deep rose shrimp requires three factors and is the clearest case for it.** The species is *defined* by Levantine Intermediate Water, so a score that cannot see that water mass is not a red shrimp score. Requiring depth, bottom temperature and bottom salinity is why the profile returns `unavailable` at every 15–30 m coastal spot: that is intended behaviour, not a bug.
+
+---
+
+## Round 2: what changed structurally, not just numerically
+
+### `water_column` is now honest about itself
+
+Seven species declare `water_column`: bluefin, little tunny, swordfish, sardinella, anchovy, horse mackerel and chub mackerel. For these, bathymetry is **not a requirement at all**, and three defects followed from not saying so:
+
+| Defect | Effect | Fix |
+|---|---|---|
+| `depth` reported in `missingFactors` | read as "we lack depth data" for a species that does not care about the seabed | `ResolvedProfile.definesFactor` no longer defines `depth` under `water_column` |
+| depth weight left in the budget | the discarded weight shrank the measured fraction, lowering confidence for a gap that does not exist | all 7 now weight only factors they define; a roster test asserts the weight sum is 1.0 |
+| `requiredFactors: [depth]` would be silently satisfiable | the engine looks for the factor in outcomes that never contain it | `PfzSpeciesRegistry` now **rejects** this at load time |
+
+Little tunny and swordfish previously carried a 0.2 depth weight under `water_column` scope, so the 0.2 was redistributed on every evaluation. The **score** was already correct — the engine renormalizes over scored factors only — so this was a reporting and confidence defect, not a scoring one. Bluefin was affected too, which is how the test caught it.
+
+### The `derived` confidence tier
+
+`FactorConfidence` gained a `DERIVED` value alongside `CITED` / `EXPERT` / `UNKNOWN`. Sea surface height anomaly and 30-day SST warming have always been *derived* in this codebase — the SSH dataset publishes no mean dynamic topography, so SSHa is our own arithmetic over two model fields — and folding that into `EXPERT` would have relabelled real measurements as a guess. It counts as low confidence: only `CITED` is fully trusted, so a derived band still discounts the score and still surfaces in `lowConfidenceFactors`.
+
+### Depth and temperature mistakes found and corrected
+
+Every correction above was made against a source actually read, and the v1 value is recorded in the species `note` field so the change is auditable in the API response rather than only in this file.
+
+## What is still missing after round 2
+
+| Gap | Affects | Status |
+|---|---|---|
+| Substrate type | all 13 demersals, cuttlefish, octopus, both shrimps | No source. `unscorableRequirements` everywhere. |
+| Surface salinity | **grey mullet** (decisive), seabass, sardinella | No surface salinity product; bottom salinity exists but is not the same thing. |
+| Zooplankton / primary production | sardine, anchovy, horse mackerel, scomber, bogue, mullet | No source. CHL is a proxy and is labelled one. |
+| Life stage | horse mackerel / chub mackerel juveniles, mullet deep populations | No life-stage input. |
+| Diel vertical migration | swordfish, little tunny | No diel-depth input; a single SST band is half the habitat. |
+| Coast distance | sardine egg retention | No coastline dataset. A depth threshold is not a distance — not doing it. |
+| Eddy kinetic energy | sardine, horse mackerel | Derivable from the SSH grid already fetched — deferred, would be a real addition. |
+| Dissolved oxygen | octopus, benthic scavengers, swordfish | No source. |
+| Life cycle | conger (catadromous) | Spawning habitat is thousands of km from feeding habitat; no lifecycle input. |
+
+**No guild-level defaults were used anywhere.** Where no source was found, the tier is `expert` or `derived` and the reasoning is in the `src` field, rather than borrowing a neighbouring species' numbers.
