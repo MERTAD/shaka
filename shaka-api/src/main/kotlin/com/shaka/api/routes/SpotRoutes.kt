@@ -21,8 +21,14 @@ import com.shaka.fishing_intel.processing.SoCalGazetteer
 import com.shaka.fishing_intel.models.*
 import com.shaka.PrefetchJobsKey
 import com.shaka.pfz.PfzGridService
+import com.shaka.pfz.PfzHistoryCell
+import com.shaka.pfz.PfzHistoryDay
+import com.shaka.pfz.PfzHistoryPoint
+import com.shaka.pfz.PfzHistoryResponse
+import com.shaka.pfz.PfzHistoryZone
 import com.shaka.pfz.PfzService
 import com.shaka.pfz.PfzSpeciesRegistry
+import com.shaka.pfz.PfzZoneStore
 import com.shaka.service.SpotService
 import com.shaka.service.ForecastService
 import com.shaka.service.HealthService
@@ -37,6 +43,24 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 import java.util.UUID
+
+private val logger = org.slf4j.LoggerFactory.getLogger("SpotRoutes")
+
+/**
+ * Decode a JSON string list persisted as TEXT, tolerating a null or corrupt cell.
+ *
+ * A history row's driver/blocker list is written as JSON, but a hand-edited or
+ * truncated row must not be able to fail the whole history response. A list that
+ * cannot be read degrades to empty and the caller's other fields still render.
+ */
+private fun decodeList(raw: String?): List<String> {
+    if (raw.isNullOrBlank()) return emptyList()
+    return try {
+        kotlinx.serialization.json.Json.decodeFromString<List<String>>(raw)
+    } catch (_: Exception) {
+        emptyList()
+    }
+}
 
 /** Parse BD thread title for leading general location tag (Inshore, Offshore, Islands, Bay, Harbor). Returns (zone, cleanedTitle) or (null, null). */
 private fun parseBdTitleForLocationTag(title: String?): Pair<String?, String?> {
@@ -557,7 +581,35 @@ fun Application.configureRouting() {
                     mode = call.request.queryParameters["mode"],
                     sizeClass = call.request.queryParameters["sizeClass"]
                 )) {
-                    is PfzService.ZonesResult.Ok -> call.respond(result.response)
+                    is PfzService.ZonesResult.Ok -> {
+                        val response = result.response
+                        // Persist on request so a location/species pair starts
+                        // building history immediately, rather than waiting up to
+                        // a day for the scheduled job to discover it exists. This
+                        // is a fire-and-forget write on a path the user is already
+                        // waiting on, so it must never be able to fail the request.
+                        //
+                        // The mode and size class must be the ones the *engine*
+                        // applied, not the raw query values: when the caller omits
+                        // them the engine falls back to the species' default mode
+                        // and default size class, and persisting under "default"
+                        // while the applied model was "feeding/large" would write a
+                        // history that the requester can never read back.
+                        if (response.zones.isNotEmpty()) {
+                            val appliedMode = response.zones.firstNotNullOfOrNull { it.mode }
+                            val appliedSize = response.zones.firstNotNullOfOrNull { it.sizeClass }
+                            launch {
+                                // replaceDay, not saveZoneResponse: this response is
+                                // the model's current answer for this date, so a zone
+                                // that has dropped out of the set must lose its row.
+                                // A plain upsert would leave yesterday's rank-2 cell
+                                // in the history and quietly invent a zone.
+                                runCatching { PfzZoneStore.replaceDay(response, appliedMode, appliedSize) }
+                                    .onFailure { logger.warn("PFZ zone persist on request failed: ${it.message}") }
+                            }
+                        }
+                        call.respond(response)
+                    }
                     is PfzService.ZonesResult.UnknownSpecies -> call.respond(
                         HttpStatusCode.NotFound,
                         mapOf(
@@ -570,6 +622,134 @@ fun Application.configureRouting() {
                     is PfzService.ZonesResult.BadLocation ->
                         call.respond(HttpStatusCode.BadRequest, mapOf("error" to result.message))
                 }
+            }
+
+            /**
+             * Persisted day-over-day zone history for one request.
+             *
+             * Reads `pfz_zones_daily` — it does NOT recompute. A trend is a claim
+             * about what the model said on each past day, and re-running today's
+             * model over yesterday's date would answer a different question:
+             * yesterday's ocean fields have been revised since, and a
+             * Copernicus request for a past date can legitimately be refused
+             * because the archive ends. What the user saw yesterday is the only
+             * honest thing to show them today, which is why it was stored.
+             *
+             * The trend is per GRID CELL, not per rank. Ranks are re-assigned every
+             * day, so "rank 1 improved" would compare two different patches of
+             * ocean. A cell's own score series is the only comparison the data
+             * supports, and `dayOverDay` is null unless the most recent two
+             * persisted days both produced a scoreable zone.
+             *
+             * A day with no scoreable zone is a GAP, not a zero. `pfz` is null for
+             * "outside its habitat" and for "a required measurement did not
+             * resolve"; both mean we could not see it, and neither is bad ground.
+             *
+             * Query parameters: `lat`, `lon`, `species` (all required), plus
+             * `mode`, `sizeClass` (must match what the zones call used — the model
+             * context is part of the key, because a bluefin feeding score and a
+             * bluefin spawning score are near-inverted models) and `days`
+             * (1-120, default 7).
+             *
+             * An empty `days` list is a 200, not a 404: history only exists once
+             * something has been persisted, and a new location legitimately has
+             * none yet. The response says so in `coverageNotes`.
+             */
+            get("/pfz/zones/history") {
+                val lat = call.request.queryParameters["lat"]?.toDoubleOrNull()
+                    ?: return@get call.respond(HttpStatusCode.BadRequest, mapOf("error" to "lat required"))
+                val lon = call.request.queryParameters["lon"]?.toDoubleOrNull()
+                    ?: return@get call.respond(HttpStatusCode.BadRequest, mapOf("error" to "lon required"))
+                val species = call.request.queryParameters["species"]
+                    ?: return@get call.respond(HttpStatusCode.BadRequest, mapOf("error" to "species required"))
+
+                if (!lat.isFinite() || lat > 90 || lat < -90 || !lon.isFinite() || lon > 180 || lon < -180) {
+                    return@get call.respond(
+                        HttpStatusCode.BadRequest,
+                        mapOf("error" to "lat in [-90, 90], lon in [-180, 180], got ($lat, $lon)")
+                    )
+                }
+                if (PfzSpeciesRegistry.byId(species) == null) {
+                    return@get call.respond(
+                        HttpStatusCode.NotFound,
+                        mapOf("error" to "Unknown species", "knownSpecies" to PfzSpeciesRegistry.all().map { it.id })
+                    )
+                }
+
+                val rawMode = call.request.queryParameters["mode"]
+                val rawSizeClass = call.request.queryParameters["sizeClass"]
+                val days = (call.request.queryParameters["days"]?.toIntOrNull() ?: 7).coerceIn(1, 120)
+                val to = java.time.LocalDate.now()
+                val from = to.minusDays(days - 1L)
+
+                val profile = PfzSpeciesRegistry.byId(species)!!
+
+                // Resolve the model context the same way the scorer did. Rows are
+                // stored under the *applied* mode ("feeding"), while an omitted
+                // query parameter would otherwise normalise to the literal
+                // "default" and match nothing — so a caller that never passes a
+                // mode would see an empty history forever.
+                val resolved = profile.resolve(rawMode, rawSizeClass)
+                val mode = rawMode ?: resolved.mode
+                val sizeClass = rawSizeClass ?: resolved.sizeClass
+
+                val rows = PfzZoneStore.loadHistory(lat, lon, species, mode, sizeClass, from, to)
+                val trend = PfzZoneStore.trend(rows, lat, lon, species, mode, sizeClass)
+
+                call.respond(
+                    PfzHistoryResponse(
+                        speciesId = species,
+                        speciesName = profile.commonName,
+                        speciesScientificName = profile.scientificName,
+                        anchorLat = lat,
+                        anchorLon = lon,
+                        mode = trend.mode,
+                        sizeClass = trend.sizeClass,
+                        fromDate = from.toString(),
+                        toDate = to.toString(),
+                        latestTopPfz = trend.latestTopPfz,
+                        dayOverDay = trend.dayOverDay,
+                        days = trend.days.map { day ->
+                            PfzHistoryDay(
+                                date = day.date,
+                                topPfz = day.topPfz,
+                                confidence = day.confidence,
+                                zoneCount = day.zones.size,
+                                scoreableCount = day.zones.count { it.status == PfzZoneStore.SCOREABLE },
+                                zones = day.zones.map { row ->
+                                    PfzHistoryZone(
+                                        rank = row.rank,
+                                        name = row.zoneName,
+                                        lat = row.cellLat,
+                                        lon = row.cellLon,
+                                        status = row.status,
+                                        pfz = row.pfz,
+                                        confidence = row.confidence,
+                                        frontKm = row.frontKm,
+                                        depthM = row.depthM,
+                                        region = row.region,
+                                        drivers = decodeList(row.driversJson),
+                                        blockers = decodeList(row.blockersJson),
+                                        missingFactors = decodeList(row.missingFactorsJson)
+                                    )
+                                }
+                            )
+                        },
+                        cells = trend.series.map { cell ->
+                            PfzHistoryCell(
+                                lat = cell.cellLat,
+                                lon = cell.cellLon,
+                                firstPfz = cell.firstPfz,
+                                lastPfz = cell.lastPfz,
+                                change = cell.change,
+                                points = cell.points.map { p ->
+                                    PfzHistoryPoint(date = p.date, pfz = p.pfz, confidence = p.confidence, rank = p.rank)
+                                }
+                            )
+                        },
+                        coverageNotes = trend.coverageNotes
+                    )
+                )
             }
 
             /**

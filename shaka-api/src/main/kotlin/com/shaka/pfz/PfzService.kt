@@ -184,6 +184,8 @@ class PfzService(
                 name = targetName(profile, parsed, rank),
                 lat = datum.lat,
                 lon = datum.lon,
+                cellLat = datum.cellLat,
+                cellLon = datum.cellLon,
                 polygon = datum.polygon,
                 holes = datum.holes,
                 status = result.status,

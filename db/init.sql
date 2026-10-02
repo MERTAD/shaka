@@ -2738,3 +2738,58 @@ INSERT INTO fishing_intel_landings (name, normalized_name, city, latitude, longi
     ('Westport Landing', 'westport', 'San Diego', 32.7553, -117.2285, 35),
     ('Long Beach Sportfishing', 'long_beach', 'Long Beach', 33.7595, -118.1880, 25)
 ON CONFLICT (name) DO NOTHING;
+
+-- ============================================================
+-- PFZ daily zone history
+-- ============================================================
+-- One row per (local_date, anchor, species, mode, size_class, grid cell).
+--
+-- The key is deliberately the GRID CELL, not the rank. Rank is re-assigned every
+-- day, so writing "rank 1" into one row across days would splice two unrelated
+-- patches of ocean into a fake trend. Cell identity keeps a cell's own score
+-- series intact and lets the API match cells honestly day over day.
+--
+-- mode/size_class are part of the key because a bluefin feeding score and a
+-- bluefin spawning score are near-inverted models against different thermal
+-- envelopes (Druon et al. 2016); a trend that mixed them would be a trend of a
+-- species that does not exist.
+--
+-- pfz is NULLABLE and null means "not scoreable" (species outside its habitat,
+-- or a required measurement such as bottom temperature did not resolve). It is
+-- never 0 -- a run of zeros would read as "consistently bad ground" when it
+-- actually means "we could not see it". The trend endpoint reports those days as
+-- gaps instead of interpolating them.
+CREATE TABLE IF NOT EXISTS pfz_zones_daily (
+    id BIGSERIAL PRIMARY KEY,
+    local_date DATE NOT NULL,
+    anchor_lat DOUBLE PRECISION NOT NULL,
+    anchor_lon DOUBLE PRECISION NOT NULL,
+    species_id VARCHAR(50) NOT NULL,
+    mode VARCHAR(50) NOT NULL DEFAULT 'default',
+    size_class VARCHAR(30) NOT NULL DEFAULT 'default',
+    cell_lat DOUBLE PRECISION NOT NULL,
+    cell_lon DOUBLE PRECISION NOT NULL,
+    zone_name VARCHAR(100),
+    rank INTEGER NOT NULL,
+    status VARCHAR(24) NOT NULL,
+    pfz INTEGER,
+    confidence INTEGER NOT NULL DEFAULT 0,
+    front_km DOUBLE PRECISION,
+    depth_m DOUBLE PRECISION,
+    sst_gradient_ckm DOUBLE PRECISION,
+    chla_gradient DOUBLE PRECISION,
+    sst_anomaly_c DOUBLE PRECISION,
+    region VARCHAR(50),
+    polygon_json TEXT,
+    drivers_json TEXT,
+    blockers_json TEXT,
+    missing_factors_json TEXT,
+    low_confidence_json TEXT,
+    persisted_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    UNIQUE (local_date, anchor_lat, anchor_lon, species_id, mode, size_class, cell_lat, cell_lon)
+);
+
+CREATE INDEX IF NOT EXISTS pfz_zones_daily_request_idx
+    ON pfz_zones_daily (anchor_lat, anchor_lon, species_id, mode, size_class, local_date DESC);
+CREATE INDEX IF NOT EXISTS pfz_zones_daily_date_idx
+    ON pfz_zones_daily (local_date);

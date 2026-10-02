@@ -152,6 +152,26 @@ object MonitoringConfig {
             initialDelayMs = 1_200_000, intervalMs = 168 * HOUR, maxRunMs = 1 * HOUR,
             staleGateHours = 0, degradedBelow = 0.90, criticalBelow = 0.30, runImmediately = true,
         ),
+        // Daily PFZ zone history. Re-scores the (anchor, species, mode,
+        // size_class) requests the API has actually been asked for and replaces
+        // that day's rows for each, so /pfz/zones/history can report a real
+        // day-over-day trend instead of recomputing yesterday's ocean.
+        //
+        // DAILY, not 6-hourly, deliberately: the thing being persisted is a
+        // habitat verdict for a calendar day, and a 0.1 degree Copernicus SST
+        // cell does not change meaningfully six times a day. The tracked set is
+        // capped at PfzZoneStore.MAX_TRACKED_REQUESTS and ordered
+        // most-recently-persisted first, so the quota ceiling is a known number.
+        //
+        // degradedBelow 0.90 rather than 0.99: a single unavailable box is a
+        // legitimate outcome (the corridor did not resolve there today) and must
+        // not alert as a degraded job. criticalBelow 0.30 still pages, because
+        // losing 70% of the tracked set means the corridor or the DB is broken.
+        JobSpec(
+            name = "pfz_zones_daily", scheduledName = "pfz_zones_daily",
+            initialDelayMs = 600_000, intervalMs = 24 * HOUR, maxRunMs = 4 * HOUR,
+            staleGateHours = 0, degradedBelow = 0.90, criticalBelow = 0.30, runImmediately = true,
+        ),
     )
 
     /**
@@ -165,7 +185,7 @@ object MonitoringConfig {
      */
     val registryExempt: Set<String> = setOf(
         "hourly_snapshot_tick", "tide_chart_cleanup", "hourly_series_cleanup",
-        "http_pool_watchdog",
+        "http_pool_watchdog", "pfz_zone_history_cleanup",
         "tide_chart_materialize", "tide_chart_catchup", "tide_year_backfill",
         "tide_remaining_backfill",
     )

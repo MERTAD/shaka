@@ -828,6 +828,21 @@ data class PfzZone(
     val lat: Double,
     val lon: Double,
     /**
+     * Stable identity of this zone's grid cell, snapped to the cell centre.
+     *
+     * [lat]/[lon] are the polygon centroid, which is recomputed from the patch
+     * shape on every build and therefore moves whenever the front shifts. That
+     * is the right thing to draw a map label at and the wrong thing to key a
+     * day-over-day trend on: two consecutive days of the same water would land
+     * on slightly different centroids and read as two unrelated cells.
+     *
+     * These two are the cell nearest the centroid on the underlying grid, so a
+     * cell that persists across days keeps the same coordinates and the trend
+     * compares one physical grid cell to itself.
+     */
+    val cellLat: Double = lat,
+    val cellLon: Double = lon,
+    /**
      * Outer ring of the zone polygon. The zone is one connected grid patch
      * whose shape follows the resolved SST/CHL front and thermal-core
      * structure, not a fixed box; this ring is that patch's outline.
@@ -882,4 +897,117 @@ data class PfzZonesResponse(
     /** Factors no zone in the box could supply for this species. */
     val missingFactors: List<String> = emptyList(),
     val coverageNotes: List<String> = emptyList()
+)
+
+/**
+ * Full response body for `GET /v1/pfz/zones/history`.
+ *
+ * This is a record of what the model said on each past day, read from
+ * `pfz_zones_daily`. It is deliberately NOT a re-run of the engine over past
+ * dates: ocean fields have been revised since they were published, and a
+ * Copernicus request for a past date can legitimately be refused because the
+ * archive ends. Recomputing would answer "what would today's model say about
+ * yesterday", which is a different and less useful question than "what did it
+ * say yesterday" — only the stored answer is the latter.
+ *
+ * The trend is per grid cell ([cells]), not per rank. Ranks are re-assigned on
+ * every rebuild, so a rank-based trend would compare unrelated patches of ocean.
+ */
+@Serializable
+data class PfzHistoryResponse(
+    val speciesId: String,
+    val speciesName: String,
+    val speciesScientificName: String,
+    val anchorLat: Double,
+    val anchorLon: Double,
+    /**
+     * The behavioural mode these rows were scored under, and the size class.
+     *
+     * Echoed rather than defaulted so a caller can see which model it is looking
+     * at, and so a near-empty history is explainable: a bluefin feeding series
+     * will not show a bluefin spawning day in it.
+     */
+    val mode: String,
+    val sizeClass: String,
+    val fromDate: String,
+    val toDate: String,
+    /**
+     * Best scoreable zone on the most recent day that had one, or null when no
+     * persisted day produced a scoreable zone. Never 0 for "unavailable" — see
+     * [PfzHistoryDay.topPfz].
+     */
+    val latestTopPfz: Int? = null,
+    /**
+     * Change between the two most recent days that both produced a scoreable
+     * zone, or null when there are fewer than two. Null with a non-null
+     * [latestTopPfz] is meaningful: today's best was 71, and the previous
+     * scoreable day was four days ago.
+     */
+    val dayOverDay: Int? = null,
+    val days: List<PfzHistoryDay> = emptyList(),
+    val cells: List<PfzHistoryCell> = emptyList(),
+    val coverageNotes: List<String> = emptyList()
+)
+
+/**
+ * One persisted day.
+ *
+ * [topPfz] is null unless at least one zone was scoreable. A null day is a gap:
+ * the species was outside its habitat, or a required factor such as bottom
+ * temperature did not resolve. Neither is a score of 0, and neither should be
+ * drawn as a point on a chart — an interpolation across a gap would invent a
+ * measurement.
+ */
+@Serializable
+data class PfzHistoryDay(
+    val date: String,
+    val topPfz: Int? = null,
+    val confidence: Int = 0,
+    val zoneCount: Int = 0,
+    val scoreableCount: Int = 0,
+    val zones: List<PfzHistoryZone> = emptyList()
+)
+
+/** One persisted zone within a day. */
+@Serializable
+data class PfzHistoryZone(
+    val rank: Int,
+    val name: String = "",
+    val lat: Double,
+    val lon: Double,
+    val status: String,
+    val pfz: Int? = null,
+    val confidence: Int = 0,
+    val frontKm: Double? = null,
+    val depthM: Double? = null,
+    val region: String? = null,
+    val drivers: List<String> = emptyList(),
+    val blockers: List<String> = emptyList(),
+    val missingFactors: List<String> = emptyList()
+)
+
+/**
+ * One grid cell's score across the days it was persisted.
+ *
+ * This is the unit a trend is honestly measured in. A cell is a real place inside
+ * the analysed box, so its series compares like with like; a rank is not.
+ */
+@Serializable
+data class PfzHistoryCell(
+    val lat: Double,
+    val lon: Double,
+    val firstPfz: Int? = null,
+    val lastPfz: Int? = null,
+    /** last minus first, or null unless both ends scored. */
+    val change: Int? = null,
+    val points: List<PfzHistoryPoint> = emptyList()
+)
+
+/** One cell observation on one day. */
+@Serializable
+data class PfzHistoryPoint(
+    val date: String,
+    val pfz: Int? = null,
+    val confidence: Int = 0,
+    val rank: Int = 0
 )

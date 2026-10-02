@@ -317,6 +317,25 @@ private fun Application.configureScheduledJobs() {
         prefetchJobs.cleanupOldHourly()
     }
 
+    // ==================== PFZ DAILY ZONE HISTORY ====================
+    // Persists one ranked-zone snapshot per day for every (anchor, species, mode,
+    // size class) the zones API has actually been asked for, so the app can show a
+    // real day-over-day trend instead of the same afternoon recomputed. Reports to
+    // MonitoringService as pfz_zones_daily.
+    val pfzZoneStore = com.shaka.pfz.PfzZoneStore
+    com.shaka.pfz.PfzZoneStore.createTablesIfNotExists()
+    val pfzZonePersistJob = com.shaka.pfz.PfzZonePersistJob()
+
+    scheduleRegisteredJob("pfz_zones_daily") {
+        pfzZonePersistJob.persistDaily()
+    }
+
+    // NIGHTLY: PFZ zone history retention sweep. registryExempt: unmonitored
+    // cleanup, like the tide/swell row prunes.
+    scheduleJob("pfz_zone_history_cleanup", initialDelayMs = 900_000, intervalMs = 86_400_000, runImmediately = true) {
+        pfzZonePersistJob.pruneOldHistory()
+    }
+
     // ==================== WEATHER TILES (Ocean Forecast) ====================
     // Runs the Copernicus CMEMS pipeline every 6 hours to generate PNG tiles
     scheduleRegisteredJob("weather_tile_pipeline") {

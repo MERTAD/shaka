@@ -214,6 +214,8 @@ class PfzGridService(
                     ).copy(
                         lat = centroidLat,
                         lon = centroidLon,
+                        cellLat = representative.lat,
+                        cellLon = representative.lon,
                         polygon = outer,
                         holes = holes
                     )
@@ -779,6 +781,17 @@ data class PfzZoneDatum(
     /** Patch centroid — the map centre of the polygon. */
     val lat: Double,
     val lon: Double,
+    /**
+     * The patch's representative grid cell, nearest the centroid.
+     *
+     * Stable where [lat]/[lon] is not: the centroid is an average over the
+     * patch, so it drifts whenever the front reshapes the patch even though the
+     * cell the score was sampled from has not moved. Persisted history keys on
+     * this, not the centroid, so a day-over-day trend compares one grid cell to
+     * itself.
+     */
+    val cellLat: Double = lat,
+    val cellLon: Double = lon,
     val sstGradientCkm: Double?,
     val chlaGradientMgM3km: Double?,
     val sstAnomalyC: Double?,
