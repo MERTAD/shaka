@@ -72,6 +72,48 @@ class PfzHistoryContextTest {
     }
 
     @Test
+    fun `an unknown mode id resolves the same way the scorer would`() {
+        // Mode ids are matched exactly, and an id that does not match silently
+        // falls back to the species' default rather than erroring. So the engine
+        // answers "?mode=FEEDING" for the default "feeding" and writes that row.
+        // Filtering on the raw string would look for a "FEEDING" row that cannot
+        // exist and report the stored history as empty when it is present.
+        // Verified against the running API: with a row stored under "feeding",
+        // history returned no days for "?mode=FEEDING".
+        val bluefin = PfzSpeciesRegistry.byId("bluefin_tuna")
+        assertNotNull(bluefin, "bluefin_tuna must be in the roster")
+
+        val fallback = bluefin.resolve("FEEDING", null)
+        val viaDefault = bluefin.resolve(null, null)
+        assertEquals(
+            viaDefault.mode,
+            fallback.mode,
+            "an unrecognised mode id must resolve to the species default, " +
+                "otherwise the stored key and the read key drift apart"
+        )
+    }
+
+    @Test
+    fun `a mode id differing only in case never matches a stored row`() {
+        // Documents why the read and delete paths must both use the resolved
+        // value: the roster stores lower-case ids, so a differently-cased
+        // request can only ever fall through to the default.
+        val bluefin = PfzSpeciesRegistry.byId("bluefin_tuna")!!
+        val applied = bluefin.resolve(null, null).mode
+        assertNotNull(applied, "bluefin_tuna must resolve a mode")
+        assertTrue(
+            bluefin.modeById("FEEDING") == null,
+            "modeById unexpectedly matched 'FEEDING'; if matching ever becomes " +
+                "case-insensitive this test needs revisiting"
+        )
+        assertEquals(
+            applied,
+            bluefin.resolve("FEEDING", null).mode,
+            "the upper-case request answered for a different mode than was stored"
+        )
+    }
+
+    @Test
     fun `the size class is resolved as well as the mode`() {
         val bluefin = PfzSpeciesRegistry.byId("bluefin_tuna")!!
         val resolved = bluefin.resolve(null, null)

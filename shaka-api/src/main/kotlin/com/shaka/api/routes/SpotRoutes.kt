@@ -621,13 +621,22 @@ fun Application.configureRouting() {
                                     val rawMode = call.request.queryParameters["mode"]
                                     val rawSizeClass = call.request.queryParameters["sizeClass"]
                                     val profile = PfzSpeciesRegistry.byId(species)
+                                    val resolved = profile?.resolve(rawMode, rawSizeClass)
+                                    // The *resolved* context, never the raw query value.
+                                    // Rows are stored under the mode the engine applied,
+                                    // and the engine resolves by exact id: a request for
+                                    // "FEEDING" falls back to the species' default mode
+                                    // and answers for that. Deleting by the raw string
+                                    // would look for a "FEEDING" row that can never
+                                    // exist, leave the real "feeding" row behind, and
+                                    // report it as today's zone.
                                     PfzZoneStore.deleteDay(
                                         response.date,
                                         response.lat,
                                         response.lon,
                                         response.speciesId,
-                                        rawMode ?: profile?.resolve(rawMode, rawSizeClass)?.mode,
-                                        rawSizeClass ?: profile?.resolve(rawMode, rawSizeClass)?.sizeClass
+                                        resolved?.mode,
+                                        resolved?.sizeClass
                                     )
                                 }
                             }.onFailure { logger.warn("PFZ zone persist on request failed: ${it.message}") }
@@ -708,14 +717,22 @@ fun Application.configureRouting() {
 
                 val profile = PfzSpeciesRegistry.byId(species)!!
 
-                // Resolve the model context the same way the scorer did. Rows are
-                // stored under the *applied* mode ("feeding"), while an omitted
-                // query parameter would otherwise normalise to the literal
-                // "default" and match nothing — so a caller that never passes a
-                // mode would see an empty history forever.
+                // Resolve the model context the same way the scorer did, and use the
+                // resolved value on both sides. Rows are stored under the
+                // *applied* mode ("feeding"), so an omitted query parameter
+                // must not normalise to the literal "default" and match
+                // nothing — a caller that never passes a mode would otherwise
+                // see an empty history forever.
+                //
+                // The raw value is not a safe substitute, either. Mode ids are
+                // matched exactly and the engine silently falls back to the
+                // species' default when the id is unknown, so "?mode=FEEDING"
+                // answers for "feeding" and writes that row. Filtering on the
+                // raw string would find no "FEEDING" row and report the stored
+                // history as empty when it is right there.
                 val resolved = profile.resolve(rawMode, rawSizeClass)
-                val mode = rawMode ?: resolved.mode
-                val sizeClass = rawSizeClass ?: resolved.sizeClass
+                val mode = resolved.mode
+                val sizeClass = resolved.sizeClass
 
                 val rows = PfzZoneStore.loadHistory(lat, lon, species, mode, sizeClass, from, to)
                 val trend = PfzZoneStore.trend(rows, lat, lon, species, mode, sizeClass)
