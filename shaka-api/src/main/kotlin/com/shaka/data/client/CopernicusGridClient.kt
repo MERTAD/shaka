@@ -59,7 +59,7 @@ class CopernicusGridClient(
         ?: System.getenv("COP_USER"),
     private val password: String? = System.getenv("COPERNICUSMARINE_SERVICE_PASSWORD")
         ?: System.getenv("COP_PASS"),
-    private val cliPath: String = System.getenv("COPERNICUSMARINE_CLI") ?: DEFAULT_CLI_PATH,
+    private val cliPath: String = System.getenv("COPERNICUSMARINE_CLI") ?: resolveCliPath(),
     private val cache: CopernicusGridCache = CopernicusGridCache()
 ) {
     private val logger = LoggerFactory.getLogger(CopernicusGridClient::class.java)
@@ -73,12 +73,37 @@ class CopernicusGridClient(
 
     companion object {
         /**
-         * Installed toolbox on the development machine. Point `COPERNICUSMARINE_CLI`
-         * elsewhere on any other host — the exe is not on PATH by default.
+         * The toolbox executable to shell out to when `COPERNICUSMARINE_CLI` is
+         * unset.
+         *
+         * A bare command name, not a path. The previous value was an absolute
+         * path into one developer's user profile, which made the default
+         * unusable on every other host and in CI for no gain: the launcher
+         * passes this straight to the process as argv[0], so the OS resolves it
+         * through PATH exactly as it would for `git` or `python`. The toolbox is
+         * installed by `copernicusmarine install`, which puts it on PATH; where
+         * it is not, set `COPERNICUSMARINE_CLI` to the full path.
          */
-        const val DEFAULT_CLI_PATH =
-            "C:/Users/cc/AppData/Roaming/Python/Python313/Scripts/copernicusmarine.exe"
+        const val DEFAULT_CLI_PATH = "copernicusmarine"
         const val DEFAULT_BOX_DEG = 0.3
+
+        /**
+         * Absolute path to the toolbox, or [DEFAULT_CLI_PATH] to let the OS
+         * resolve it through PATH.
+         *
+         * A `pip install --user` puts the toolbox in the per-user Scripts
+         * directory, which Windows does NOT add to PATH for GUI processes, so
+         * PATH alone fails on a normal desktop even when the toolbox is
+         * installed. Deriving that location from `APPDATA` keeps the default
+         * working on any Windows account without hardcoding one developer's
+         * profile into the source.
+         */
+        fun resolveCliPath(): String {
+            val appData = System.getenv("APPDATA") ?: return DEFAULT_CLI_PATH
+            val scripts = Path.of(appData, "Python", "Python313", "Scripts")
+            val exe = scripts.resolve("copernicusmarine.exe")
+            return if (Files.isExecutable(exe)) exe.toString() else DEFAULT_CLI_PATH
+        }
     }
 
     private val credsReady: Boolean get() = username != null && password != null

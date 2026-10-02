@@ -70,12 +70,13 @@ class CopernicusGridClientTest {
         runner: CsvRunner,
         username: String? = "kmertad",
         password: String? = "test-password",
-        cache: CopernicusGridCache = isolatedCache()
+        cache: CopernicusGridCache = isolatedCache(),
+        cliPath: String = "fake-copernicusmarine.exe"
     ) = CopernicusGridClient(
         runner = runner,
         username = username,
         password = password,
-        cliPath = "fake-copernicusmarine.exe",
+        cliPath = cliPath,
         cache = cache
     )
 
@@ -537,5 +538,52 @@ class CopernicusGridClientTest {
         }
         assertNull(grid)
         assertEquals(0, runner.runs)
+    }
+
+    @Test
+    fun `the default toolbox path is not a hardcoded user profile`() {
+        // It used to be a literal absolute path into one developer's home
+        // directory, so it resolved only on that machine and on nobody else's.
+        // The check is on the SOURCE, not on the resolved value: on this very
+        // machine APPDATA is C:\Users\cc\AppData\Roaming, so a correctly derived
+        // path legitimately contains "Users\cc". What must not happen is that
+        // literal appearing in the code, or a path under APPDATA resolving
+        // somewhere that is not APPDATA.
+        val source = Files.readString(
+            Path.of("src/main/kotlin/com/shaka/data/client/CopernicusGridClient.kt")
+        )
+        assertFalse(
+            source.contains("Users\\\\cc") || source.contains("Users/cc"),
+            "the CLI path is still a literal from one developer's profile"
+        )
+        assertFalse(
+            source.contains("AppData/Roaming/Python"),
+            "the per-user Scripts directory is still hardcoded instead of derived"
+        )
+
+        val resolved = CopernicusGridClient.resolveCliPath()
+        val appData = System.getenv("APPDATA")
+        if (appData == null) {
+            assertEquals(CopernicusGridClient.DEFAULT_CLI_PATH, resolved)
+        } else {
+            assertTrue(
+                resolved == CopernicusGridClient.DEFAULT_CLI_PATH ||
+                    resolved.startsWith(appData),
+                "expected a path under APPDATA or a bare command name, got $resolved"
+            )
+        }
+    }
+
+    @Test
+    fun `the injected CLI path is the one that reaches argv`() {
+        // The escape hatch for a host where the toolbox is neither on PATH nor
+        // under APPDATA: whatever is injected must be what the subprocess is
+        // actually asked to run, not the discovery result.
+        val runner = CsvRunner()
+        runBlocking {
+            client(runner, cliPath = "somewhere\\else\\copernicusmarine.exe")
+                .fetchGrid(CopernicusField.SST, 40.0, 5.0, date = date)
+        }
+        assertEquals("somewhere\\else\\copernicusmarine.exe", runner.sawArgs.first())
     }
 }
