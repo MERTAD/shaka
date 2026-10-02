@@ -1011,3 +1011,24 @@ data class PfzHistoryPoint(
     val confidence: Int = 0,
     val rank: Int = 0
 )
+
+/**
+ * The 404 body for a species the server does not recognise.
+ *
+ * A declared type rather than a `mapOf`, because a bare `mapOf("error" to
+ * String, "knownSpecies" to List<String>)` is a `Map<String, Any>`: kotlinx
+ * serialisation cannot find a serializer for the erased value type and throws
+ * while encoding the response. The client sees a 500 with no body instead of
+ * the 404 it is written to handle, so a typo in a species id presents as a
+ * server fault. Bodies of only strings are unaffected, which is why every
+ * other error path looked fine.
+ *
+ * The roster travels with the error on purpose. "Unknown species" alone is
+ * indistinguishable from a species this deployment has not heard of; the list
+ * is what lets a caller correct a typo without a second round trip.
+ */
+@Serializable
+data class PfzUnknownSpeciesResponse(
+    val error: String,
+    val knownSpecies: List<String>
+)

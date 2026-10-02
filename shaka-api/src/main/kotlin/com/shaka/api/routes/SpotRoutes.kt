@@ -29,6 +29,7 @@ import com.shaka.pfz.PfzHistoryZone
 import com.shaka.pfz.PfzService
 import com.shaka.pfz.PfzSpeciesRegistry
 import com.shaka.pfz.PfzZoneStore
+import com.shaka.pfz.PfzUnknownSpeciesResponse
 import com.shaka.pfz.PfzZonesResponse
 import com.shaka.service.SpotService
 import com.shaka.service.ForecastService
@@ -232,9 +233,17 @@ private suspend fun io.ktor.server.application.ApplicationCall.respondWithDeadli
     }
 }
 
-fun Application.configureRouting() {
+/**
+ * @param pfzService injectable so route-level tests can exercise the PFZ
+ *   endpoints without a live Copernicus corridor. Defaults to the real
+ *   service, so the production wiring is unchanged; the parameter exists
+ *   because a handler whose collaborators are all constructed inline cannot
+ *   be tested at the HTTP boundary at all.
+ */
+fun Application.configureRouting(
+    pfzService: PfzService = PfzService(gridSource = PfzGridService())
+) {
     val spotService = SpotService()
-    val pfzService = PfzService(gridSource = PfzGridService())
     val forecastService = ForecastService()
     val copernicusClient = CopernicusClient()
     val healthService = HealthService()
@@ -768,9 +777,9 @@ fun Application.configureRouting() {
                     }
                     is PfzService.ZonesResult.UnknownSpecies -> call.respond(
                         HttpStatusCode.NotFound,
-                        mapOf(
-                            "error" to "Unknown species",
-                            "knownSpecies" to PfzSpeciesRegistry.all().map { it.id }
+                        PfzUnknownSpeciesResponse(
+                            error = "Unknown species",
+                            knownSpecies = PfzSpeciesRegistry.all().map { it.id }
                         )
                     )
                     is PfzService.ZonesResult.BadDate ->
@@ -828,7 +837,10 @@ fun Application.configureRouting() {
                 if (PfzSpeciesRegistry.byId(species) == null) {
                     return@get call.respond(
                         HttpStatusCode.NotFound,
-                        mapOf("error" to "Unknown species", "knownSpecies" to PfzSpeciesRegistry.all().map { it.id })
+                        PfzUnknownSpeciesResponse(
+                            error = "Unknown species",
+                            knownSpecies = PfzSpeciesRegistry.all().map { it.id }
+                        )
                     )
                 }
 

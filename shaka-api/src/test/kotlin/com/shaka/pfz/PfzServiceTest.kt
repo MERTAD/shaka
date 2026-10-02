@@ -621,6 +621,34 @@ class PfzServiceTest {
         assertEquals(0, response.confidence)
     }
 
+    @Test
+    fun `evaluateZones stays honest when no corridor is configured at all`() {
+        // Distinct from the previous case, which has a grid source that
+        // resolves nothing. Here there is no grid source, which is what an
+        // installation without Copernicus configured actually looks like. The
+        // two produce the same empty answer and must say different things:
+        // "the corridor went dark" and "no corridor was ever set up" lead a
+        // reader to different conclusions, and conflating them hides a
+        // misconfiguration behind an ordinary no-data day.
+        val service = PfzService(gridSource = null)
+
+        val result = rankedZones(service)
+        assertTrue(result is PfzService.ZonesResult.Ok)
+        val response = (result as PfzService.ZonesResult.Ok).response
+
+        assertTrue(response.zones.isEmpty(), "no corridor -> no ranked zones")
+        assertEquals(0, response.confidence)
+        assertTrue(
+            response.coverageNotes.any { it.contains("No spatial grid corridor") },
+            "the caller must be told no corridor is configured, got ${response.coverageNotes}"
+        )
+        assertTrue(
+            response.coverageNotes.none { it.contains("did not resolve") },
+            "an unconfigured corridor did not 'fail to resolve'; that wording " +
+                "reports a transient data gap and hides the misconfiguration"
+        )
+    }
+
     // ------------------------------------------------- zone mode and size class
 
     @Test
