@@ -29,6 +29,7 @@ import com.shaka.pfz.PfzHistoryZone
 import com.shaka.pfz.PfzService
 import com.shaka.pfz.PfzSpeciesRegistry
 import com.shaka.pfz.PfzZoneStore
+import com.shaka.pfz.PfzZonesResponse
 import com.shaka.service.SpotService
 import com.shaka.service.ForecastService
 import com.shaka.service.HealthService
@@ -153,6 +154,53 @@ internal fun buildPfzHistoryResponse(
         },
         coverageNotes = trend.coverageNotes
     )
+}
+
+/**
+ * What the zones endpoint should do to the store after answering.
+ *
+ * A pure decision, separated from the write so it can be tested without a
+ * database or a live Copernicus corridor. The two branches are not the same
+ * operation and the difference matters: one replaces the day, the other
+ * deletes it.
+ */
+internal sealed interface PfzPersistAction {
+    /** Zones exist for this date: write them, replacing whatever was there. */
+    data class ReplaceDay(val mode: String?, val sizeClass: String?) : PfzPersistAction
+
+    /** No zones resolved: clear the day so stale rows are not read back. */
+    data class ClearDay(val mode: String?, val sizeClass: String?) : PfzPersistAction
+}
+
+/**
+ * Decide how to persist a zones response.
+ *
+ * The applied context is never taken from the raw query value. Rows are stored
+ * under the mode the engine applied, and the engine resolves by exact id: a
+ * request for "FEEDING" falls back to the species' default and answers for
+ * that. Keying off the raw string would look for a "FEEDING" row that can
+ * never exist, and leave the real one behind to be read back as today's zone.
+ *
+ * Empty is not a no-op. When the corridor does not resolve, nothing can be
+ * written, but rows from an earlier request for the same date would otherwise
+ * survive and be reported as the current answer — ground the model has just
+ * said it cannot see. The empty day itself needs no row: the history layer
+ * already reports an absent day as a gap.
+ */
+internal fun pfzPersistAction(
+    response: PfzZonesResponse,
+    species: String,
+    rawMode: String? = null,
+    rawSizeClass: String? = null
+): PfzPersistAction {
+    if (response.zones.isNotEmpty()) {
+        return PfzPersistAction.ReplaceDay(
+            mode = response.zones.firstNotNullOfOrNull { it.mode },
+            sizeClass = response.zones.firstNotNullOfOrNull { it.sizeClass }
+        )
+    }
+    val resolved = PfzSpeciesRegistry.byId(species)?.resolve(rawMode, rawSizeClass)
+    return PfzPersistAction.ClearDay(mode = resolved?.mode, sizeClass = resolved?.sizeClass)
 }
 
 /** Parse BD thread title for leading general location tag (Inshore, Offshore, Islands, Bay, Harbor). Returns (zone, cleanedTitle) or (null, null). */
@@ -690,47 +738,29 @@ fun Application.configureRouting() {
                         // history that the requester can never read back.
                         launch {
                             runCatching {
-                                if (response.zones.isNotEmpty()) {
-                                    val appliedMode = response.zones.firstNotNullOfOrNull { it.mode }
-                                    val appliedSize = response.zones.firstNotNullOfOrNull { it.sizeClass }
-                                    // replaceDay, not saveZoneResponse: this response is
-                                    // the model's current answer for this date, so a zone
-                                    // that has dropped out of the set must lose its row.
-                                    // A plain upsert would leave yesterday's rank-2 cell
-                                    // in the history and quietly invent a zone.
-                                    PfzZoneStore.replaceDay(response, appliedMode, appliedSize)
-                                } else {
-                                    // Empty is not a no-op. The corridor did not resolve
-                                    // for this box today, so no zone can be persisted, but
-                                    // rows written by an earlier request for the same date
-                                    // would otherwise survive and be read back as though
-                                    // they were today's answer. The applied context has to
-                                    // come from the profile here rather than from the
-                                    // zones, because there are none to read it off —
-                                    // the same resolution the history endpoint does, so
-                                    // this clears exactly the series a reader would ask
-                                    // for. The empty day itself needs no row: the history
-                                    // layer already reports an absent day as a gap.
-                                    val rawMode = call.request.queryParameters["mode"]
-                                    val rawSizeClass = call.request.queryParameters["sizeClass"]
-                                    val profile = PfzSpeciesRegistry.byId(species)
-                                    val resolved = profile?.resolve(rawMode, rawSizeClass)
-                                    // The *resolved* context, never the raw query value.
-                                    // Rows are stored under the mode the engine applied,
-                                    // and the engine resolves by exact id: a request for
-                                    // "FEEDING" falls back to the species' default mode
-                                    // and answers for that. Deleting by the raw string
-                                    // would look for a "FEEDING" row that can never
-                                    // exist, leave the real "feeding" row behind, and
-                                    // report it as today's zone.
-                                    PfzZoneStore.deleteDay(
-                                        response.date,
-                                        response.lat,
-                                        response.lon,
-                                        response.speciesId,
-                                        resolved?.mode,
-                                        resolved?.sizeClass
-                                    )
+                                when (val action = pfzPersistAction(
+                                    response = response,
+                                    species = species,
+                                    rawMode = call.request.queryParameters["mode"],
+                                    rawSizeClass = call.request.queryParameters["sizeClass"]
+                                )) {
+                                    is PfzPersistAction.ReplaceDay ->
+                                        // replaceDay, not saveZoneResponse: this response is
+                                        // the model's current answer for this date, so a zone
+                                        // that has dropped out of the set must lose its row.
+                                        // A plain upsert would leave yesterday's rank-2 cell
+                                        // in the history and quietly invent a zone.
+                                        PfzZoneStore.replaceDay(response, action.mode, action.sizeClass)
+
+                                    is PfzPersistAction.ClearDay ->
+                                        PfzZoneStore.deleteDay(
+                                            response.date,
+                                            response.lat,
+                                            response.lon,
+                                            response.speciesId,
+                                            action.mode,
+                                            action.sizeClass
+                                        )
                                 }
                             }.onFailure { logger.warn("PFZ zone persist on request failed: ${it.message}") }
                         }
