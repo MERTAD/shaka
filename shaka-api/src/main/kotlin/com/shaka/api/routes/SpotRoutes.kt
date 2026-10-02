@@ -62,6 +62,99 @@ private fun decodeList(raw: String?): List<String> {
     }
 }
 
+/**
+ * Build the PFZ history response for an already-validated request.
+ *
+ * Extracted from the route so the read can be tested without standing up
+ * the whole application. It is not a generic helper: the model context is
+ * the part that decides which rows a caller sees, and getting it wrong is
+ * invisible — the endpoint answers 200 with an empty day list while the
+ * stored history is sitting right there. That is exactly what happened
+ * when the raw query value was used as the store key.
+ */
+internal fun buildPfzHistoryResponse(
+    species: String,
+    lat: Double,
+    lon: Double,
+    rawMode: String?,
+    rawSizeClass: String?,
+    from: java.time.LocalDate,
+    to: java.time.LocalDate
+): PfzHistoryResponse {
+    val profile = PfzSpeciesRegistry.byId(species)!!
+
+    // Resolve the model context the same way the scorer did, and use the
+    // resolved value on both sides. Rows are stored under the *applied* mode
+    // ("feeding"), so an omitted query parameter must not normalise to the
+    // literal "default" and match nothing — a caller that never passes a mode
+    // would otherwise see an empty history forever.
+    //
+    // The raw value is not a safe substitute, either. Mode ids are matched
+    // exactly and the engine silently falls back to the species' default when
+    // the id is unknown, so "?mode=FEEDING" answers for "feeding" and writes
+    // that row. Filtering on the raw string would find no "FEEDING" row and
+    // report the stored history as empty when it is right there.
+    val resolved = profile.resolve(rawMode, rawSizeClass)
+    val mode = resolved.mode
+    val sizeClass = resolved.sizeClass
+
+    val rows = PfzZoneStore.loadHistory(lat, lon, species, mode, sizeClass, from, to)
+    val trend = PfzZoneStore.trend(rows, lat, lon, species, mode, sizeClass)
+
+    return PfzHistoryResponse(
+        speciesId = species,
+        speciesName = profile.commonName,
+        speciesScientificName = profile.scientificName,
+        anchorLat = lat,
+        anchorLon = lon,
+        mode = trend.mode,
+        sizeClass = trend.sizeClass,
+        fromDate = from.toString(),
+        toDate = to.toString(),
+        latestTopPfz = trend.latestTopPfz,
+        dayOverDay = trend.dayOverDay,
+        days = trend.days.map { day ->
+            PfzHistoryDay(
+                date = day.date,
+                topPfz = day.topPfz,
+                confidence = day.confidence,
+                zoneCount = day.zones.size,
+                scoreableCount = day.zones.count { it.status == PfzZoneStore.SCOREABLE },
+                zones = day.zones.map { row ->
+                    PfzHistoryZone(
+                        rank = row.rank,
+                        name = row.zoneName,
+                        lat = row.cellLat,
+                        lon = row.cellLon,
+                        status = row.status,
+                        pfz = row.pfz,
+                        confidence = row.confidence,
+                        frontKm = row.frontKm,
+                        depthM = row.depthM,
+                        region = row.region,
+                        drivers = decodeList(row.driversJson),
+                        blockers = decodeList(row.blockersJson),
+                        missingFactors = decodeList(row.missingFactorsJson)
+                    )
+                }
+            )
+        },
+        cells = trend.series.map { cell ->
+            PfzHistoryCell(
+                lat = cell.cellLat,
+                lon = cell.cellLon,
+                firstPfz = cell.firstPfz,
+                lastPfz = cell.lastPfz,
+                change = cell.change,
+                points = cell.points.map { p ->
+                    PfzHistoryPoint(date = p.date, pfz = p.pfz, confidence = p.confidence, rank = p.rank)
+                }
+            )
+        },
+        coverageNotes = trend.coverageNotes
+    )
+}
+
 /** Parse BD thread title for leading general location tag (Inshore, Offshore, Islands, Bay, Harbor). Returns (zone, cleanedTitle) or (null, null). */
 private fun parseBdTitleForLocationTag(title: String?): Pair<String?, String?> {
     if (title.isNullOrBlank()) return null to null
@@ -730,66 +823,8 @@ fun Application.configureRouting() {
                 // answers for "feeding" and writes that row. Filtering on the
                 // raw string would find no "FEEDING" row and report the stored
                 // history as empty when it is right there.
-                val resolved = profile.resolve(rawMode, rawSizeClass)
-                val mode = resolved.mode
-                val sizeClass = resolved.sizeClass
-
-                val rows = PfzZoneStore.loadHistory(lat, lon, species, mode, sizeClass, from, to)
-                val trend = PfzZoneStore.trend(rows, lat, lon, species, mode, sizeClass)
-
                 call.respond(
-                    PfzHistoryResponse(
-                        speciesId = species,
-                        speciesName = profile.commonName,
-                        speciesScientificName = profile.scientificName,
-                        anchorLat = lat,
-                        anchorLon = lon,
-                        mode = trend.mode,
-                        sizeClass = trend.sizeClass,
-                        fromDate = from.toString(),
-                        toDate = to.toString(),
-                        latestTopPfz = trend.latestTopPfz,
-                        dayOverDay = trend.dayOverDay,
-                        days = trend.days.map { day ->
-                            PfzHistoryDay(
-                                date = day.date,
-                                topPfz = day.topPfz,
-                                confidence = day.confidence,
-                                zoneCount = day.zones.size,
-                                scoreableCount = day.zones.count { it.status == PfzZoneStore.SCOREABLE },
-                                zones = day.zones.map { row ->
-                                    PfzHistoryZone(
-                                        rank = row.rank,
-                                        name = row.zoneName,
-                                        lat = row.cellLat,
-                                        lon = row.cellLon,
-                                        status = row.status,
-                                        pfz = row.pfz,
-                                        confidence = row.confidence,
-                                        frontKm = row.frontKm,
-                                        depthM = row.depthM,
-                                        region = row.region,
-                                        drivers = decodeList(row.driversJson),
-                                        blockers = decodeList(row.blockersJson),
-                                        missingFactors = decodeList(row.missingFactorsJson)
-                                    )
-                                }
-                            )
-                        },
-                        cells = trend.series.map { cell ->
-                            PfzHistoryCell(
-                                lat = cell.cellLat,
-                                lon = cell.cellLon,
-                                firstPfz = cell.firstPfz,
-                                lastPfz = cell.lastPfz,
-                                change = cell.change,
-                                points = cell.points.map { p ->
-                                    PfzHistoryPoint(date = p.date, pfz = p.pfz, confidence = p.confidence, rank = p.rank)
-                                }
-                            )
-                        },
-                        coverageNotes = trend.coverageNotes
-                    )
+                    buildPfzHistoryResponse(species, lat, lon, rawMode, rawSizeClass, from, to)
                 )
             }
 
