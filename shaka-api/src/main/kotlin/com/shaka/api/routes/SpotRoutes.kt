@@ -595,18 +595,42 @@ fun Application.configureRouting() {
                         // and default size class, and persisting under "default"
                         // while the applied model was "feeding/large" would write a
                         // history that the requester can never read back.
-                        if (response.zones.isNotEmpty()) {
-                            val appliedMode = response.zones.firstNotNullOfOrNull { it.mode }
-                            val appliedSize = response.zones.firstNotNullOfOrNull { it.sizeClass }
-                            launch {
-                                // replaceDay, not saveZoneResponse: this response is
-                                // the model's current answer for this date, so a zone
-                                // that has dropped out of the set must lose its row.
-                                // A plain upsert would leave yesterday's rank-2 cell
-                                // in the history and quietly invent a zone.
-                                runCatching { PfzZoneStore.replaceDay(response, appliedMode, appliedSize) }
-                                    .onFailure { logger.warn("PFZ zone persist on request failed: ${it.message}") }
-                            }
+                        launch {
+                            runCatching {
+                                if (response.zones.isNotEmpty()) {
+                                    val appliedMode = response.zones.firstNotNullOfOrNull { it.mode }
+                                    val appliedSize = response.zones.firstNotNullOfOrNull { it.sizeClass }
+                                    // replaceDay, not saveZoneResponse: this response is
+                                    // the model's current answer for this date, so a zone
+                                    // that has dropped out of the set must lose its row.
+                                    // A plain upsert would leave yesterday's rank-2 cell
+                                    // in the history and quietly invent a zone.
+                                    PfzZoneStore.replaceDay(response, appliedMode, appliedSize)
+                                } else {
+                                    // Empty is not a no-op. The corridor did not resolve
+                                    // for this box today, so no zone can be persisted, but
+                                    // rows written by an earlier request for the same date
+                                    // would otherwise survive and be read back as though
+                                    // they were today's answer. The applied context has to
+                                    // come from the profile here rather than from the
+                                    // zones, because there are none to read it off —
+                                    // the same resolution the history endpoint does, so
+                                    // this clears exactly the series a reader would ask
+                                    // for. The empty day itself needs no row: the history
+                                    // layer already reports an absent day as a gap.
+                                    val rawMode = call.request.queryParameters["mode"]
+                                    val rawSizeClass = call.request.queryParameters["sizeClass"]
+                                    val profile = PfzSpeciesRegistry.byId(species)
+                                    PfzZoneStore.deleteDay(
+                                        response.date,
+                                        response.lat,
+                                        response.lon,
+                                        response.speciesId,
+                                        rawMode ?: profile?.resolve(rawMode, rawSizeClass)?.mode,
+                                        rawSizeClass ?: profile?.resolve(rawMode, rawSizeClass)?.sizeClass
+                                    )
+                                }
+                            }.onFailure { logger.warn("PFZ zone persist on request failed: ${it.message}") }
                         }
                         call.respond(response)
                     }

@@ -292,6 +292,32 @@ class PfzZoneStoreIT {
     }
 
     @Test
+    fun `an empty response clears the day instead of leaving stale rows`() {
+        // The on-demand zones endpoint persists what the engine just answered.
+        // When the corridor stops resolving, the answer is "no zones today" and
+        // the rows from an earlier request for the same date must not survive:
+        // the history endpoint would otherwise read them back as today's answer,
+        // reporting ground the model just said it could not see. Nothing replaces
+        // them — an absent day is already a gap to a reader.
+        PfzZoneStore.saveZoneResponse(response(listOf(zone(pfz = 60))), "feeding", "large")
+        assertEquals(
+            1,
+            PfzZoneStore.loadHistory(anchorLat, anchorLon, "bluefin_tuna", "feeding", "large", today, today).size,
+            "precondition: the day should have a row before the empty response"
+        )
+
+        val cleared = PfzZoneStore.deleteDay(
+            today.toString(), anchorLat, anchorLon, "bluefin_tuna", "feeding", "large"
+        )
+
+        assertEquals(1, cleared, "the stale row was not deleted")
+        assertTrue(
+            PfzZoneStore.loadHistory(anchorLat, anchorLon, "bluefin_tuna", "feeding", "large", today, today).isEmpty(),
+            "stale rows survived an empty response and would read as today's answer"
+        )
+    }
+
+    @Test
     fun `a day with only unscored zones has no top score`() {
         PfzZoneStore.saveZoneResponse(
             response(listOf(zone(status = PfzStatus.UNAVAILABLE, pfz = null))),
