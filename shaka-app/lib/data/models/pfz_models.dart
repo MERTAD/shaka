@@ -439,3 +439,297 @@ class PfzZonesResponse {
   List<PfzZone> get drawable =>
       zones.where((z) => z.polygon.length >= 3).toList();
 }
+
+/// Full body for `GET /v1/pfz/zones/history` — what the model said about this
+/// box on each past day, read from the server's persisted `pfz_zones_daily` rows.
+///
+/// This is deliberately NOT a re-run of the engine over past dates. Ocean fields
+/// get revised after publication and a Copernicus request for a past date can be
+/// refused outright once the archive moves on, so recomputing would answer "what
+/// would today's model say about yesterday" rather than "what did it say
+/// yesterday". Only the stored answer is the second thing.
+///
+/// Two nulls mean different things and must be rendered differently:
+///  * [PfzHistoryDay.topPfz] null — no zone scored that day. The species was
+///    outside its habitat, or a required measurement (bottom temperature, bottom
+///    salinity) did not resolve. This is a GAP. It is not 0, and a chart must not
+///    draw a line through it.
+///  * [PfzHistoryCell.change] null — the cell has no comparison to make: a single
+///    observation, or an unscored end. Not "unchanged".
+class PfzZoneHistory {
+  final String speciesId;
+  final String speciesName;
+  final String speciesScientificName;
+  final double anchorLat;
+  final double anchorLon;
+
+  /// The model context these rows were scored under. A bluefin feeding series
+  /// and a spawning series are separate measurements and never interleave.
+  final String mode;
+  final String sizeClass;
+
+  final String fromDate;
+  final String toDate;
+
+  /// Best score on the most recent day that had one, scanning back over unscored
+  /// days rather than reporting 0 for the newest one.
+  final int? latestTopPfz;
+
+  /// Change between the two most recent days that both scored. Null with fewer
+  /// than two, which is a real and common state on a new location.
+  final int? dayOverDay;
+
+  final List<PfzHistoryDay> days;
+  final List<PfzHistoryCell> cells;
+  final List<String> coverageNotes;
+
+  const PfzZoneHistory({
+    required this.speciesId,
+    required this.speciesName,
+    required this.speciesScientificName,
+    required this.anchorLat,
+    required this.anchorLon,
+    required this.mode,
+    required this.sizeClass,
+    required this.fromDate,
+    required this.toDate,
+    this.latestTopPfz,
+    this.dayOverDay,
+    this.days = const [],
+    this.cells = const [],
+    this.coverageNotes = const [],
+  });
+
+  factory PfzZoneHistory.fromJson(Map<String, dynamic> json) {
+    return PfzZoneHistory(
+      speciesId: json['speciesId'] as String? ?? 'unknown',
+      speciesName: json['speciesName'] as String? ?? 'Unknown',
+      speciesScientificName: json['speciesScientificName'] as String? ?? '',
+      anchorLat: (json['anchorLat'] as num?)?.toDouble() ?? 0.0,
+      anchorLon: (json['anchorLon'] as num?)?.toDouble() ?? 0.0,
+      mode: json['mode'] as String? ?? 'default',
+      sizeClass: json['sizeClass'] as String? ?? 'default',
+      fromDate: json['fromDate'] as String? ?? '',
+      toDate: json['toDate'] as String? ?? '',
+      latestTopPfz: (json['latestTopPfz'] as num?)?.toInt(),
+      dayOverDay: (json['dayOverDay'] as num?)?.toInt(),
+      days: (json['days'] as List? ?? const [])
+          .map((e) => PfzHistoryDay.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      cells: (json['cells'] as List? ?? const [])
+          .map((e) => PfzHistoryCell.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      coverageNotes: (json['coverageNotes'] as List?)
+              ?.map((e) => e.toString())
+              .toList() ??
+          const [],
+    );
+  }
+
+  /// True when nothing has been persisted for this request yet.
+  ///
+  /// A new location legitimately starts here, so this is a "not yet" state and
+  /// not an error to surface as one.
+  bool get isEmpty => days.isEmpty;
+
+  /// Days that produced a scoreable zone, in chronological order.
+  List<PfzHistoryDay> get scoredDays =>
+      days.where((d) => d.topPfz != null).toList();
+
+  /// Best single day over the window, or null when nothing scored.
+  int? get bestPfz => days
+      .map((d) => d.topPfz)
+      .whereType<int>()
+      .fold<int?>(null, (best, v) => best == null || v > best ? v : best);
+
+  /// A one-line, non-alarmist summary for a chart header.
+  ///
+  /// Says "no scored days" rather than showing a flat 0 line, because a flat line
+  /// at zero is a claim about the ground and we have none to make.
+  String get summary {
+    if (isEmpty) return 'No history yet';
+    final scored = scoredDays.length;
+    if (scored == 0) {
+      return '${days.length} day(s) recorded, none scoreable';
+    }
+    final delta = dayOverDay;
+    final deltaText = delta == null
+        ? 'no change to compare'
+        : delta > 0
+            ? '+$delta vs previous scored day'
+            : delta < 0
+                ? '$delta vs previous scored day'
+                : 'unchanged';
+    return '$scored of ${days.length} day(s) scored · $deltaText';
+  }
+}
+
+/// One persisted day of zone history.
+class PfzHistoryDay {
+  final String date;
+
+  /// Best scoreable zone that day, or null when none scored. A gap, never 0.
+  final int? topPfz;
+
+  /// Confidence of the day's best scored zone; 0 when nothing scored, because a
+  /// day we could not score cannot also be claiming high confidence.
+  final int confidence;
+
+  final int zoneCount;
+  final int scoreableCount;
+  final List<PfzHistoryZone> zones;
+
+  const PfzHistoryDay({
+    required this.date,
+    this.topPfz,
+    this.confidence = 0,
+    this.zoneCount = 0,
+    this.scoreableCount = 0,
+    this.zones = const [],
+  });
+
+  factory PfzHistoryDay.fromJson(Map<String, dynamic> json) {
+    return PfzHistoryDay(
+      date: json['date'] as String? ?? '',
+      topPfz: (json['topPfz'] as num?)?.toInt(),
+      confidence: (json['confidence'] as num?)?.toInt() ?? 0,
+      zoneCount: (json['zoneCount'] as num?)?.toInt() ?? 0,
+      scoreableCount: (json['scoreableCount'] as num?)?.toInt() ?? 0,
+      zones: (json['zones'] as List? ?? const [])
+          .map((e) => PfzHistoryZone.fromJson(e as Map<String, dynamic>))
+          .toList(),
+    );
+  }
+
+  bool get hasScore => topPfz != null;
+
+  /// Day label for a chart axis: "14/07".
+  String get shortLabel {
+    final parts = date.split('-');
+    if (parts.length != 3) return date;
+    return '${parts[2]}/${parts[1]}';
+  }
+}
+
+/// One persisted zone within a day.
+class PfzHistoryZone {
+  final int rank;
+  final String name;
+  final double lat;
+  final double lon;
+  final PfzStatus status;
+  final int? pfz;
+  final int confidence;
+  final double? frontKm;
+  final double? depthM;
+  final String? region;
+  final List<String> drivers;
+  final List<String> blockers;
+  final List<String> missingFactors;
+
+  const PfzHistoryZone({
+    required this.rank,
+    required this.name,
+    required this.lat,
+    required this.lon,
+    required this.status,
+    this.pfz,
+    this.confidence = 0,
+    this.frontKm,
+    this.depthM,
+    this.region,
+    this.drivers = const [],
+    this.blockers = const [],
+    this.missingFactors = const [],
+  });
+
+  factory PfzHistoryZone.fromJson(Map<String, dynamic> json) {
+    List<String> strings(String key) =>
+        (json[key] as List?)?.map((e) => e.toString()).toList() ?? const [];
+    return PfzHistoryZone(
+      rank: (json['rank'] as num?)?.toInt() ?? 0,
+      name: json['name'] as String? ?? '',
+      lat: (json['lat'] as num?)?.toDouble() ?? 0.0,
+      lon: (json['lon'] as num?)?.toDouble() ?? 0.0,
+      status: PfzStatus.parse(json['status'] as String?),
+      pfz: (json['pfz'] as num?)?.toInt(),
+      confidence: (json['confidence'] as num?)?.toInt() ?? 0,
+      frontKm: (json['frontKm'] as num?)?.toDouble(),
+      depthM: (json['depthM'] as num?)?.toDouble(),
+      region: json['region'] as String?,
+      drivers: strings('drivers'),
+      blockers: strings('blockers'),
+      missingFactors: strings('missingFactors'),
+    );
+  }
+}
+
+/// One grid cell's score across the days it was persisted — the unit a trend is
+/// honestly measured in. A cell is a real place inside the box; a rank is not,
+/// and ranks are re-assigned on every rebuild.
+class PfzHistoryCell {
+  final double lat;
+  final double lon;
+  final int? firstPfz;
+  final int? lastPfz;
+
+  /// Last minus first, or null when there is no comparison to make.
+  final int? change;
+
+  final List<PfzHistoryPoint> points;
+
+  const PfzHistoryCell({
+    required this.lat,
+    required this.lon,
+    this.firstPfz,
+    this.lastPfz,
+    this.change,
+    this.points = const [],
+  });
+
+  factory PfzHistoryCell.fromJson(Map<String, dynamic> json) {
+    return PfzHistoryCell(
+      lat: (json['lat'] as num?)?.toDouble() ?? 0.0,
+      lon: (json['lon'] as num?)?.toDouble() ?? 0.0,
+      firstPfz: (json['firstPfz'] as num?)?.toInt(),
+      lastPfz: (json['lastPfz'] as num?)?.toInt(),
+      change: (json['change'] as num?)?.toInt(),
+      points: (json['points'] as List? ?? const [])
+          .map((e) => PfzHistoryPoint.fromJson(e as Map<String, dynamic>))
+          .toList(),
+    );
+  }
+
+  bool get hasChange => change != null;
+
+  /// Cells worth showing in a list: the ones that actually moved, best first.
+  static List<PfzHistoryCell> movers(List<PfzHistoryCell> cells) {
+    final moving = cells.where((c) => c.change != null).toList()
+      ..sort((a, b) => (b.change ?? 0).compareTo(a.change ?? 0));
+    return moving;
+  }
+}
+
+/// One cell observation on one day. [pfz] null means unscored, not zero.
+class PfzHistoryPoint {
+  final String date;
+  final int? pfz;
+  final int confidence;
+  final int rank;
+
+  const PfzHistoryPoint({
+    required this.date,
+    this.pfz,
+    this.confidence = 0,
+    this.rank = 0,
+  });
+
+  factory PfzHistoryPoint.fromJson(Map<String, dynamic> json) {
+    return PfzHistoryPoint(
+      date: json['date'] as String? ?? '',
+      pfz: (json['pfz'] as num?)?.toInt(),
+      confidence: (json['confidence'] as num?)?.toInt() ?? 0,
+      rank: (json['rank'] as num?)?.toInt() ?? 0,
+    );
+  }
+}
