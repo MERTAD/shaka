@@ -66,8 +66,14 @@ jobs:
       # Plain postgis container WITHOUT db/init.sql: the contract test only
       # needs postgres+postgis — the API creates its own tables at boot and
       # seed.sql creates the rest. Mounting the 2500-line dev init.sql here
-      # couples monitor CI to unrelated schema churn (and its GIST-index bug
-      # killed the container on first cold start).
+      # couples monitor CI to unrelated schema churn.
+      #
+      # init.sql USED to be unusable here: its GIST expression index on
+      # fishing_intel_report_geos was missing the double parentheses that
+      # CREATE INDEX needs around an expression, so Postgres rejected it with
+      # `syntax error at or near "::"` and killed the container on first cold
+      # start. That index is now fixed in db/init.sql (the parens are back), so
+      # this is a deliberate decoupling rather than a workaround for a bug.
       - name: Start Postgres (postgis)
         if: steps.relevant.outputs.monitor == 'true'
         run: |

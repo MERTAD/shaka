@@ -2711,7 +2711,7 @@ CREATE INDEX IF NOT EXISTS fishing_intel_report_geos_report_idx ON fishing_intel
 
 -- Spatial index for nearby queries (uses PostGIS)
 CREATE INDEX IF NOT EXISTS fishing_intel_report_geos_location_idx ON fishing_intel_report_geos USING GIST (
-    ST_SetSRID(ST_MakePoint(longitude, latitude), 4326)::geography
+    ((ST_SetSRID(ST_MakePoint(longitude, latitude), 4326))::geography)
 );
 
 -- Seed initial sources
