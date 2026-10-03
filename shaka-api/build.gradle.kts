@@ -9,8 +9,70 @@ plugins {
 group = "com.shaka"
 version = "1.0.0"
 
+/**
+ * Local, never-committed configuration, read from `.env.local` in this module.
+ *
+ * The file is covered by the `*.local` rule in the root .gitignore, so
+ * credentials can sit on disk without ever reaching a commit. Do not move them
+ * into a tracked file: this fork is a PUBLIC repository, and a secret in a
+ * commit is public the moment it is pushed and stays reachable by SHA
+ * afterwards, including after the file is edited or the branch is deleted.
+ *
+ * Deliberately not applied to the test task. Several tests opt into live
+ * network access by checking whether these variables are present, so seeding
+ * them here would silently turn the suite from hermetic into a live-integration
+ * run for anyone who has this file. Set them in your shell to run those
+ * deliberately.
+ */
+val localEnv: Map<String, String> = run {
+    val file = file(".env.local")
+    if (!file.exists()) {
+        emptyMap()
+    } else {
+        file.readLines()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() && !it.startsWith("#") && it.contains('=') }
+            .associate { line ->
+                val key = line.substringBefore('=').trim()
+                val value = line.substringAfter('=').trim().trim('"').trim('\'')
+                key to value
+            }
+    }
+}
+
 application {
     mainClass.set("com.shaka.ApplicationKt")
+}
+
+tasks.named<JavaExec>("run") {
+    // Copied in only when the shell has not already set them, so an explicit
+    // `$env:COP_USER=...` for one run still wins over the file.
+    localEnv.forEach { (key, value) ->
+        if (System.getenv(key) == null) environment(key, value)
+    }
+}
+
+/**
+ * Reports which local keys were found, by name only.
+ *
+ * Values are never printed. "Is the credential wired up?" is a question whose
+ * answer does not require reading the secret back to the terminal, and a
+ * diagnostic that echoes secrets is a diagnostic that ends up in a pasted log.
+ */
+tasks.register("localEnvKeys") {
+    group = "help"
+    description = "List the key names loaded from .env.local, without their values."
+    val keys = localEnv.keys.sorted()
+    val loaded = file(".env.local").exists()
+    doLast {
+        if (!loaded) {
+            println(".env.local not found; nothing is being injected.")
+        } else if (keys.isEmpty()) {
+            println(".env.local has no usable KEY=value lines.")
+        } else {
+            println(".env.local loaded ${keys.size} key(s): ${keys.joinToString(", ")}")
+        }
+    }
 }
 
 repositories {
