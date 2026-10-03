@@ -4,7 +4,13 @@ import com.shaka.pfz.PfzService
 import io.ktor.client.request.get
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpStatusCode
+import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.Application
+import io.ktor.server.application.install
+import io.ktor.server.config.MapApplicationConfig
+import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.server.plugins.statuspages.StatusPages
+import io.ktor.server.response.respond
 import io.ktor.server.testing.ApplicationTestBuilder
 import io.ktor.server.testing.testApplication
 import kotlinx.serialization.json.Json
@@ -147,14 +153,51 @@ private suspend fun io.ktor.client.statement.HttpResponse.json(): JsonObject =
 /**
  * The PFZ routes, mounted the way `Application.module()` mounts them.
  *
- * `testApplication` already supplies ContentNegotiation and StatusPages, so
- * there is nothing to install here and no plugin bookkeeping to get wrong.
- * That was worth establishing rather than assuming: adding either one back
- * throws DuplicatePluginException, and while chasing it I spent a cycle
- * convinced a bodiless 404 was a routing fault when it was a typo in a test
- * URL. If a status here ever looks wrong, read the request URL first.
+ * The empty `config` is load-bearing, and it is here because these tests were
+ * silently green for the wrong reason. `application.conf` lives in *main*
+ * resources, so it is on the test classpath, and it declares
+ * `modules = [com.shaka.ApplicationKt.module]`. `testApplication` auto-loads it
+ * and runs the real `module()`, which registers `/v1/pfz/zones` with a live
+ * `PfzService(gridSource = PfzGridService())` and installs the plugins below.
+ * Ktor resolves a duplicated path to the first registration, so the real route
+ * won and the stub passed here was never consulted: the injected service was
+ * dead code. Only assertions that short-circuit before the grid (400 on a
+ * missing lat, 404 on an unknown species) could still pass, which is exactly
+ * the 7-of-8 that did while the eighth read real Copernicus output off the warm
+ * toolbox cache and failed.
+ *
+ * Replacing the config stops that auto-load, so this block is the only thing
+ * that registers these routes and installs these plugins.
+ *
+ * `testApplication` does *not* supply ContentNegotiation or StatusPages - I
+ * had that written here as fact and it was wrong; both were arriving from the
+ * auto-loaded `module()`, which is the same defect wearing a different hat.
+ * With `module()` gone they have to be installed explicitly, and they are
+ * installed with the same Json configuration production uses so the bytes on
+ * the wire match. Without ContentNegotiation every response is a bodiless 406.
+ *
+ * If a test here starts returning live measurements, the empty config has been
+ * undone; if every status is 406, the plugin installs have been.
  */
 private fun withApi(block: suspend ApplicationTestBuilder.() -> Unit) = testApplication {
-    application { configureRouting(pfzService = PfzService(gridSource = null)) }
+    environment { config = MapApplicationConfig() }
+    application {
+        install(ContentNegotiation) {
+            json(Json {
+                prettyPrint = true
+                isLenient = true
+                ignoreUnknownKeys = true
+            })
+        }
+        install(StatusPages) {
+            exception<Throwable> { call, cause ->
+                call.respond(
+                    HttpStatusCode.InternalServerError,
+                    mapOf("error" to (cause.message ?: "Unknown error"))
+                )
+            }
+        }
+        configureRouting(pfzService = PfzService(gridSource = null))
+    }
     block()
 }
