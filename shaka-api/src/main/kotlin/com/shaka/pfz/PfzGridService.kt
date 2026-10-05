@@ -143,8 +143,8 @@ class PfzGridService(
      * profile); this returns every chosen patch with its measured corridor,
      * honestly null where the grid could not resolve.
      */
-    suspend fun analyzeZones(lat: Double, lon: Double, requested: LocalDate): List<PfzZoneDatum> =
-        withTimeoutOrNull(ANALYZE_TIMEOUT_MS) {
+    suspend fun analyzeZones(lat: Double, lon: Double, requested: LocalDate): PfzZoneAnalysis {
+        val analysis = withTimeoutOrNull(ANALYZE_TIMEOUT_MS) {
             val (frontGrids, benthicGrids, monthlyGrids) = coroutineScope {
                 // Same three batches as the spot corridor: front fields, benthic
                 // plus daily SSH, and the monthly mean the anomaly is differenced
@@ -158,7 +158,16 @@ class PfzGridService(
             val sstaGrid = frontGrids[CopernicusField.SSTA]
             val chlGrid = frontGrids[CopernicusField.CHL]
 
-            val anchor = sstGrid ?: chlGrid ?: sstaGrid ?: return@withTimeoutOrNull emptyList()
+            val anchor = sstGrid ?: chlGrid ?: sstaGrid
+                ?: return@withTimeoutOrNull PfzZoneAnalysis.Empty(
+                    PfzZoneEmptyReason.NO_GRID, pointResolved = false
+                )
+            // Whether the caller's own cell carries data is a different question
+            // from whether any grid arrived. A beach or a coastal town resolves
+            // nothing at the point while the open water 10 km off is perfectly
+            // measurable, and reporting those two the same way throws away the
+            // only fact the caller can actually act on.
+            val pointResolved = nearestCellValue(anchor, lat, lon) != null
             val sstEdges = sstGrid?.let { edgeGradients(it) }
             val chlEdges = chlGrid?.let { edgeGradients(it) }
             val analyzed = anchor.dataDate
@@ -180,7 +189,11 @@ class PfzGridService(
                     }
                 }
             }
-            if (cells.isEmpty()) return@withTimeoutOrNull emptyList()
+            if (cells.isEmpty()) {
+                return@withTimeoutOrNull PfzZoneAnalysis.Empty(
+                    PfzZoneEmptyReason.NO_PATCHES, pointResolved
+                )
+            }
 
             val signatures = cells.associateWith { cellSignature(it, sstEdges, chlEdges, sstaGrid) }
             val cellMag = cells.associateWith {
@@ -193,7 +206,7 @@ class PfzGridService(
             val lonBarriers = barrierAtLon(anchor.lons, sstGrid, chlGrid)
             val patches = connectedPatches(cells, signatures, cellMag, latBarriers, lonBarriers)
 
-            patches
+            val chosen = patches
                 .sortedWith(
                     compareByDescending<Patch> { it.maxGradient }
                         .thenByDescending { it.cells.size }
@@ -220,7 +233,65 @@ class PfzGridService(
                         holes = holes
                     )
                 }
-        } ?: emptyList()
+
+            if (chosen.isEmpty()) {
+                PfzZoneAnalysis.Empty(PfzZoneEmptyReason.NO_PATCHES, pointResolved)
+            } else {
+                PfzZoneAnalysis.Resolved(chosen, pointResolved)
+            }
+        }
+        // A deadline that expired is not an absence of data. This used to
+        // collapse into the same emptyList() as a genuinely featureless sea, so
+        // a cold fetch that ran long was reported to the caller as "no zones
+        // today" — indistinguishable from a real no-data day, and therefore
+        // impossible to tell apart from one in production.
+        return analysis ?: PfzZoneAnalysis.Empty(PfzZoneEmptyReason.TIMED_OUT, pointResolved = false)
+    }
+
+    // ---------------------------------------------------------------- outcome
+
+    /**
+     * Why a zone analysis produced nothing.
+     *
+     * These are four different facts and the caller has to be able to tell them
+     * apart: one is worth retrying, one is a misconfiguration, one is the
+     * caller's own coordinates being wrong, and one is an honest empty day.
+     */
+    enum class PfzZoneEmptyReason {
+        /** The analysis deadline expired before the datasets finished arriving. */
+        TIMED_OUT,
+
+        /** No SST/SSTA/CHL grid resolved for this area at all. */
+        NO_GRID,
+
+        /** Grids arrived, but none survived the patch fencing. */
+        NO_PATCHES
+    }
+
+    /**
+     * Outcome of [analyzeZones].
+     *
+     * [pointResolved] travels with the result rather than being derived from
+     * [zones] because it is independent: a masked point can still sit inside a
+     * window that yields perfectly good offshore zones, which is exactly the
+     * case that needs saying out loud.
+     */
+    sealed interface PfzZoneAnalysis {
+        val zones: List<PfzZoneDatum>
+        val pointResolved: Boolean
+
+        data class Resolved(
+            override val zones: List<PfzZoneDatum>,
+            override val pointResolved: Boolean
+        ) : PfzZoneAnalysis
+
+        data class Empty(
+            val reason: PfzZoneEmptyReason,
+            override val pointResolved: Boolean
+        ) : PfzZoneAnalysis {
+            override val zones: List<PfzZoneDatum> = emptyList()
+        }
+    }
 
     // ---------------------------------------------------------------- maths
 
@@ -721,7 +792,17 @@ class PfzGridService(
     companion object {
         private const val KM_PER_DEG_LAT = 110.574
         private const val KM_PER_DEG_LON = 111.320
-        private const val ANALYZE_TIMEOUT_MS = 120_000L
+        /**
+         * Wall-clock budget for one analysis.
+         *
+         * This has to clear [CopernicusGridClient]'s 180s per-dataset subprocess
+         * timeout, or a single slow dataset can never finish and every cold area
+         * fails the budget by construction. A measured cold fetch of nine Med
+         * datasets over three parallel batches ran 106-131s, which the previous
+         * 120s cap straddled: the same request succeeded or reported "no data"
+         * depending on which side of the line the download happened to land.
+         */
+        private const val ANALYZE_TIMEOUT_MS = 240_000L
 
         /** Days between the two SST analyses differenced into dSST30. */
         private const val SST_TREND_DAYS = 30L

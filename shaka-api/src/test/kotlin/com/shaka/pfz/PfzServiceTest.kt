@@ -615,10 +615,52 @@ class PfzServiceTest {
         val response = (result as PfzService.ZonesResult.Ok).response
         assertTrue(response.zones.isEmpty(), "no resolved grid -> no ranked zones")
         assertTrue(
-            response.coverageNotes.any { it.contains("did not resolve") },
-            "the caller must be told why there are no zones, got ${response.coverageNotes}"
+            response.coverageNotes.any { it.contains("No Copernicus SST/SSTA/CHL grid resolved") },
+            "the caller must be told the products never arrived, got ${response.coverageNotes}"
         )
         assertEquals(0, response.confidence)
+    }
+
+    @Test
+    fun `an empty zone list never claims a fetch timeout was an absence of data`() {
+        // The wording is the contract. A deadline that expires is a retryable
+        // infrastructure event; reporting it as "no data today" tells the user
+        // the sea is uninteresting when in fact nothing was ever measured, and
+        // there is no way to tell the two apart afterwards.
+        val service = PfzService(gridSource = null)
+        val timedOut = PfzGridService.PfzZoneAnalysis.Empty(
+            PfzGridService.PfzZoneEmptyReason.TIMED_OUT, pointResolved = false
+        )
+        val note = service.emptyZonesNote(timedOut, 41.515, 2.515)
+
+        assertTrue(note.contains("fetch timeout"), "must name the timeout, got: $note")
+        assertTrue(note.contains("not an absence of data"), "got: $note")
+        assertTrue(note.contains("masked cell"), "a masked point must still be said, got: $note")
+    }
+
+    @Test
+    fun `an empty zone list distinguishes a missing product from an empty sea`() {
+        val service = PfzService(gridSource = null)
+        val noGrid = PfzGridService.PfzZoneAnalysis.Empty(
+            PfzGridService.PfzZoneEmptyReason.NO_GRID, pointResolved = true
+        )
+        val noPatches = PfzGridService.PfzZoneAnalysis.Empty(
+            PfzGridService.PfzZoneEmptyReason.NO_PATCHES, pointResolved = true
+        )
+
+        val gridNote = service.emptyZonesNote(noGrid, 41.515, 2.515)
+        val patchNote = service.emptyZonesNote(noPatches, 41.515, 2.515)
+
+        assertTrue(gridNote.contains("do not cover these coordinates or the download failed"), gridNote)
+        assertTrue(patchNote.contains("no zone patch could be"), patchNote)
+        assertTrue(
+            gridNote != patchNote,
+            "a missing product and a featureless sea are different facts"
+        )
+        assertFalse(
+            gridNote.contains("masked cell"),
+            "the point resolved here, so no masked-cell claim may be made: $gridNote"
+        )
     }
 
     @Test

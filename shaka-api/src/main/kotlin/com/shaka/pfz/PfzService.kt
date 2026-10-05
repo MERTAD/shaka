@@ -151,18 +151,17 @@ class PfzService(
             )
         }
 
-        val data = gridSource.analyzeZones(lat, lon, parsed)
-        if (data.isEmpty()) {
+        val analysis = gridSource.analyzeZones(lat, lon, parsed)
+        if (analysis.zones.isEmpty()) {
             return ZonesResult.Ok(
                 zonesResponse(
                     profile, lat, lon, parsed, emptyList(),
-                    "Copernicus SST/SSTA/CHL grids did not resolve around ($lat, $lon). " +
-                        "No zones can be ranked today."
+                    emptyZonesNote(analysis, lat, lon)
                 )
             )
         }
 
-        val ranked = data
+        val ranked = analysis.zones
             .map { datum ->
                 datum to PfzEngine.evaluateSpecies(
                     profile, zoneObservation(parsed, datum), mode, sizeClass
@@ -209,8 +208,57 @@ class PfzService(
                 lowConfidenceFactors = result.lowConfidenceFactors
             )
         }
-        return ZonesResult.Ok(zonesResponse(profile, lat, lon, parsed, zones))
+        return ZonesResult.Ok(
+            zonesResponse(
+                profile, lat, lon, parsed, zones,
+                // Zones can be perfectly good while the caller's own cell is
+                // masked, so the fact is worth carrying even on a success.
+                if (analysis.pointResolved) null else maskedPointNote(lat, lon)
+            )
+        )
     }
+
+    /**
+     * The one note that explains an empty zone list.
+     *
+     * Each reason gets its own wording because each one tells the reader to do
+     * something different. A deadline that expired is not an absence of data and
+     * must not be phrased as one; a missing product may be a misconfiguration;
+     * a masked point means the coordinates themselves are the problem.
+     */
+    internal fun emptyZonesNote(
+        analysis: PfzGridService.PfzZoneAnalysis,
+        lat: Double,
+        lon: Double
+    ): String {
+        val masked = if (analysis.pointResolved) {
+            ""
+        } else {
+            " The requested point ($lat, $lon) also falls in a masked cell of that grid — " +
+                "land, coast, or outside the satellite footprint."
+        }
+        return when ((analysis as PfzGridService.PfzZoneAnalysis.Empty).reason) {
+            PfzGridService.PfzZoneEmptyReason.TIMED_OUT ->
+                "The Copernicus datasets for this area did not finish downloading within the " +
+                    "analysis deadline. This is a fetch timeout, not an absence of data: nothing " +
+                    "below is a measurement of the sea. Retry once the area is cached.$masked"
+
+            PfzGridService.PfzZoneEmptyReason.NO_GRID ->
+                "No Copernicus SST/SSTA/CHL grid resolved for this area, so no zone can be " +
+                    "anchored to a measurement. The products either do not cover these " +
+                    "coordinates or the download failed.$masked"
+
+            PfzGridService.PfzZoneEmptyReason.NO_PATCHES ->
+                "The Copernicus grids resolved around ($lat, $lon) but no zone patch could be " +
+                    "segmented from them today.$masked"
+        }
+    }
+
+    /** Advisory for a request whose own cell is masked but whose window yielded zones. */
+    private fun maskedPointNote(lat: Double, lon: Double): String =
+        "The requested point ($lat, $lon) is in a masked cell (land, coast, or outside the " +
+            "satellite footprint), so the zones below are the nearest resolved water to it, " +
+            "not a measurement at the coordinates you asked for."
 
     /**
      * SatCatch-style target label for a ranked zone, e.g.

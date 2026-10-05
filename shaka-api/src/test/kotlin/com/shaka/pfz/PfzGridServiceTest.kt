@@ -7,6 +7,7 @@ import java.time.LocalDate
 import kotlin.math.abs
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -174,8 +175,16 @@ class PfzGridServiceTest {
 
     // -------------------------------------------------------------- zones
 
-    private fun analyzeZones(source: PfzGridSource): List<PfzZoneDatum> =
+    private fun analyzeZones(source: PfzGridSource): PfzGridService.PfzZoneAnalysis =
         runBlocking { PfzGridService(source).analyzeZones(lat, lon, date) }
+
+    /** Same, but against a coordinate that sits exactly on a lattice node. */
+    private fun analyzeZonesAt(
+        source: PfzGridSource,
+        atLat: Double,
+        atLon: Double
+    ): PfzGridService.PfzZoneAnalysis =
+        runBlocking { PfzGridService(source).analyzeZones(atLat, atLon, date) }
 
     @Test
     fun `analyzeZones splits the box into patches that do not cross a detected front`() {
@@ -183,7 +192,7 @@ class PfzGridServiceTest {
         // shared latitude edge, so the box splits into two 2-cell patches
         // (south band and north band) instead of four single cells.
         val sst = grid(CopernicusField.SST, cell = { i, _ -> i.toDouble() })
-        val zones = analyzeZones(FakeSource(grids = mapOf(CopernicusField.SST to sst)))
+        val zones = analyzeZones(FakeSource(grids = mapOf(CopernicusField.SST to sst))).zones
         assertEquals(2, zones.size)
 
         // Patches are ranked by gradient strength, so the thermally warmer
@@ -201,7 +210,7 @@ class PfzGridServiceTest {
     @Test
     fun `a flat resolved box merges into one patch whose polygon is the box outline`() {
         val sst = grid(CopernicusField.SST, cell = { _, _ -> 21.4 })
-        val zones = analyzeZones(FakeSource(grids = mapOf(CopernicusField.SST to sst)))
+        val zones = analyzeZones(FakeSource(grids = mapOf(CopernicusField.SST to sst))).zones
 
         assertEquals(1, zones.size, "no front -> the whole box is one patch")
         val ring = zones[0].polygon
@@ -217,7 +226,7 @@ class PfzGridServiceTest {
     @Test
     fun `a front split keeps both patches interior and together tiles the box`() {
         val sst = grid(CopernicusField.SST, cell = { i, _ -> i.toDouble() })
-        val zones = analyzeZones(FakeSource(grids = mapOf(CopernicusField.SST to sst)))
+        val zones = analyzeZones(FakeSource(grids = mapOf(CopernicusField.SST to sst))).zones
 
         assertEquals(2, zones.size)
         for (z in zones) {
@@ -248,7 +257,7 @@ class PfzGridServiceTest {
             lons = lons,
             cell = { i, j -> if (i == 1 && j == 1) 0.0 else 1.0 }
         )
-        val zones = analyzeZones(FakeSource(grids = mapOf(CopernicusField.SSTA to ssta)))
+        val zones = analyzeZones(FakeSource(grids = mapOf(CopernicusField.SSTA to ssta))).zones
 
         assertEquals(2, zones.size, "one warm ring patch + one neutral core patch")
         val ring = zones.firstOrNull { it.holes.isNotEmpty() }
@@ -270,7 +279,7 @@ class PfzGridServiceTest {
         val ssta = grid(CopernicusField.SSTA, cell = { _, _ -> 0.6 })
         val zones = analyzeZones(
             FakeSource(grids = mapOf(CopernicusField.SST to sst, CopernicusField.CHL to chl, CopernicusField.SSTA to ssta))
-        )
+        ).zones
 
         val zone = zones.first()
         assertEquals(FrontCoincidence.COINCIDENT, zone.frontCoincidence)
@@ -285,7 +294,58 @@ class PfzGridServiceTest {
     }
 
     @Test
-    fun `analyzeZones returns no zones when no grid resolves`() {
-        assertTrue(analyzeZones(FakeSource()).isEmpty())
+    fun `analyzeZones names the reason instead of collapsing every empty case`() {
+        // An empty zone list used to mean one thing, which meant a fetch that
+        // ran past the deadline was indistinguishable from a day with no data.
+        val noGrid = analyzeZones(FakeSource())
+        assertTrue(noGrid.zones.isEmpty())
+        assertEquals(
+            PfzGridService.PfzZoneEmptyReason.NO_GRID,
+            (noGrid as PfzGridService.PfzZoneAnalysis.Empty).reason
+        )
+        assertFalse(noGrid.pointResolved, "nothing resolved, so the point did not")
+    }
+
+    @Test
+    fun `a masked point cell is reported even when the window still yields zones`() {
+        // The coast case: the caller's own cell is land-masked, but open water
+        // inside the same window is measurable and must still be ranked. The
+        // zones are legitimate; what the caller has to be told is that they are
+        // not a measurement at the coordinates they asked for. Query exactly on
+        // node (1,1) so "nearest cell" is not a floating-point tie.
+        val masked = grid(
+            CopernicusField.SST,
+            cell = { i, j -> if (i == 1 && j == 1) Double.NaN else 21.4 }
+        )
+        val analysis = analyzeZonesAt(FakeSource(grids = mapOf(CopernicusField.SST to masked)), 41.52, 2.52)
+
+        assertFalse(analysis.pointResolved, "the cell the point reads is masked")
+        assertTrue(analysis.zones.isNotEmpty(), "the rest of the window is still open water")
+
+        // Sanity: the identical grid with no masked cell does resolve the point,
+        // so the flag above is reading the mask and not the geometry.
+        val clear = grid(CopernicusField.SST, cell = { _, _ -> 21.4 })
+        assertTrue(
+            analyzeZonesAt(FakeSource(grids = mapOf(CopernicusField.SST to clear)), 41.52, 2.52).pointResolved,
+            "the same grid with no masked cell resolves the point"
+        )
+    }
+
+    @Test
+    fun `a degenerate lattice is no patches rather than a resolved empty`() {
+        // A grid with a single row has no box-cells to build patches from. That
+        // is a different failure from "the products never arrived" and must not
+        // be reported as either, or a truncated download looks like a no-data
+        // day. Note this is not the same as an all-masked grid: patches are
+        // fenced on geometry and anomaly class, so a fully NaN grid still yields
+        // one patch whose corridor fields are simply null.
+        val degenerate = grid(CopernicusField.SST, lats = listOf(41.52), lons = listOf(2.51, 2.52, 2.53))
+        val analysis = analyzeZones(FakeSource(grids = mapOf(CopernicusField.SST to degenerate)))
+
+        assertTrue(analysis.zones.isEmpty())
+        assertEquals(
+            PfzGridService.PfzZoneEmptyReason.NO_PATCHES,
+            (analysis as PfzGridService.PfzZoneAnalysis.Empty).reason
+        )
     }
 }
