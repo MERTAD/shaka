@@ -1,6 +1,12 @@
 package com.shaka.data.client
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
 import java.nio.file.Files
@@ -88,6 +94,19 @@ class CopernicusGridClient(
         const val DEFAULT_BOX_DEG = 0.3
 
         /**
+         * How many distinct datasets may be downloaded at once.
+         *
+         * A cold PFZ corridor expands to roughly nine datasets across three
+         * batches, and the point of overlapping them is that the wall-clock cost
+         * becomes the slowest product rather than their sum. It is capped anyway
+         * because each one is a real transfer — bottom salinity alone moves
+         * 166 MB — so this is "enough to hide the latency", not "unbounded".Four
+         * keeps the peak load near what a single batch was already asking for
+         * while still collapsing the critical path by most of its length.
+         */
+        const val MAX_CONCURRENT_SUBSETS = 4
+
+        /**
          * Absolute path to the toolbox, or [DEFAULT_CLI_PATH] to let the OS
          * resolve it through PATH.
          *
@@ -112,6 +131,20 @@ class CopernicusGridClient(
      * Fetch several fields, batching by dataset so two variables of one product
      * share a single subprocess. Fields whose product could not be read are
      * simply absent from the result — never present with a guessed value.
+     *
+     * Datasets are fetched concurrently, because batching by dataset does *not*
+     * mean one subprocess per call. The PFZ benthic batch lists six fields that
+     * live in five separate products (`phy-tem`, `phy-sal`, `phy-cur`, `phy-mld`,
+     * `phy-ssh`), so it expands to five independent downloads, and the front
+     * batch to three (`SST_MED_SST`, `SST_MED_SSTA`, the 1km BGC product). Run
+     * in sequence those downloads add up: measured cold, a single bottom-
+     * temperature subset costs 59–74 s on its own, which does not fit the
+     * caller's 120 s analysis budget once five of them are queued. Overlapping
+     * them makes a cold corridor cost about as much as its slowest product
+     * instead of the sum.
+     *
+     * Concurrency is bounded because these are real downloads — one of them
+     * moves 166 MB — so this is not "run everything at once".
      */
     suspend fun fetchGrids(
         fields: List<CopernicusField>,
@@ -121,10 +154,40 @@ class CopernicusGridClient(
         date: LocalDate
     ): Map<CopernicusField, CopernicusGrid> {
         if (fields.isEmpty()) return emptyMap()
-        val out = LinkedHashMap<CopernicusField, CopernicusGrid>()
-        for ((datasetId, group) in fields.groupBy { it.datasetId }) {
-            out += fetchGroup(datasetId, group, lat, lon, boxDeg, date)
+        val groups = fields.groupBy { it.datasetId }
+        if (groups.size == 1) {
+            val (datasetId, group) = groups.entries.first()
+            return fetchGroup(datasetId, group, lat, lon, boxDeg, date)
         }
+        val gate = Semaphore(MAX_CONCURRENT_SUBSETS)
+        val parts = coroutineScope {
+            groups.entries
+                .map { (datasetId, group) ->
+                    async {
+                        gate.withPermit {
+                            // One product failing must read as one missing factor,
+                            // not sink the sibling products that did resolve.
+                            // Cancellation is rethrown: swallowing it would break
+                            // the caller's withTimeoutOrNull budget.
+                            try {
+                                fetchGroup(datasetId, group, lat, lon, boxDeg, date)
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                logger.warn(
+                                    "Copernicus subset for $datasetId failed: ${e.message}"
+                                )
+                                emptyMap()
+                            }
+                        }
+                    }
+                }
+                .awaitAll()
+        }
+        // Merged in submission order so the result is deterministic regardless of
+        // which download finished first.
+        val out = LinkedHashMap<CopernicusField, CopernicusGrid>()
+        for (part in parts) out += part
         return out
     }
 
