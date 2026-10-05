@@ -248,4 +248,35 @@ object DatabaseFactory {
      * Check if database is connected.
      */
     fun isConnected(): Boolean = dataSource?.isRunning == true
+
+    /**
+     * Whether a database was asked for at all.
+     *
+     * Distinct from [isConnected] on purpose. `Application.tryInitDatabase`
+     * falls back to in-memory when a configured database refuses to connect,
+     * which leaves [isConnected] false in exactly the same state as an
+     * installation that never wanted a database. Without this flag the health
+     * endpoint cannot tell "no database here" from "the database is broken",
+     * and reports `db: ok` for the second one while every write is dropped.
+     */
+    @Volatile
+    private var configured: Boolean = false
+
+    fun isConfigured(): Boolean = configured
+
+    /**
+     * Record that a database was requested, before any connection attempt.
+     *
+     * Called from `tryInitDatabase` so the flag is set even when the attempt
+     * that follows throws.
+     */
+    fun markConfigured() {
+        configured = true
+    }
+
+    /**
+     * Configured but not connected: the app is running in-memory while
+     * pretending it is persisted.
+     */
+    fun isDegraded(): Boolean = configured && !isConnected()
 }

@@ -45,9 +45,55 @@ object HealthSummaryLogic {
 
     // ---------- Per-check policy ----------
 
-    fun dbCause(dbOk: Boolean): Pair<Severity, HealthCause> {
-        val sev = if (dbOk) Severity.OK else Severity.CRITICAL
-        return sev to HealthCause("db", sev.wire, if (dbOk) "reachable" else "unreachable", "must respond to SELECT 1 within 2s")
+    /**
+     * What the database is actually doing, as distinct from what was asked for.
+     *
+     * The four states exist because `connected == false` alone is ambiguous. It
+     * is the steady state of an installation that deliberately runs in-memory,
+     * and it is also what a wrong password looks like after `tryInitDatabase`
+     * falls back. Reporting both as `ok` is how a deployment silently stops
+     * persisting while every health check stays green.
+     */
+    enum class DbState(val wire: String, val severity: Severity) {
+        /** No database configured. In-memory by design, nothing to ping. */
+        ABSENT("absent", Severity.OK),
+
+        /** Connected and answering SELECT 1. */
+        REACHABLE("reachable", Severity.OK),
+
+        /**
+         * Configured, never connected. The app is serving reads from memory and
+         * dropping every write, which is worse than being down because it looks
+         * like it works.
+         */
+        NOT_CONNECTED("not_connected", Severity.CRITICAL),
+
+        /** Was connected and is no longer answering. */
+        UNREACHABLE("unreachable", Severity.CRITICAL)
+    }
+
+    /**
+     * @param configured a database was requested, whether or not it came up
+     * @param connected the pool is running
+     * @param pingOk a bounded SELECT 1 succeeded; only meaningful when connected
+     */
+    fun dbState(configured: Boolean, connected: Boolean, pingOk: Boolean): DbState = when {
+        !configured -> DbState.ABSENT
+        !connected -> DbState.NOT_CONNECTED
+        pingOk -> DbState.REACHABLE
+        else -> DbState.UNREACHABLE
+    }
+
+    fun dbCause(state: DbState): Pair<Severity, HealthCause> {
+        val expected = when (state) {
+            DbState.ABSENT -> "no DATABASE_URL set; running in-memory by design"
+            DbState.REACHABLE -> "must respond to SELECT 1 within 2s"
+            DbState.NOT_CONNECTED ->
+                "DATABASE_URL is set, so the connection must come up; this instance is " +
+                    "running in-memory and is not persisting anything"
+            DbState.UNREACHABLE -> "must respond to SELECT 1 within 2s"
+        }
+        return state.severity to HealthCause("db", state.severity.wire, state.wire, expected)
     }
 
     fun jobSuccessSeverity(spec: MonitoringConfig.JobSpec, successRate: Double): Severity = when {

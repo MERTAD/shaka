@@ -16,23 +16,79 @@ class HealthSummaryTest {
     private val hourly = MonitoringConfig.jobByName("hourly_swell_wind")!!
     private val satellite = MonitoringConfig.jobByName("satellite_prefetch")!!
 
+    // ---------- db state ----------
+
+    @Test
+    fun `a configured database that never connected is not healthy`() {
+        // The bug this encodes: /health used to test only isConnected(), which
+        // is false both for a deliberate in-memory install and for a configured
+        // database whose connect() threw. Both reported db: ok, so a deployment
+        // with a bad password stayed green while dropping every write.
+        val state = HealthSummaryLogic.dbState(configured = true, connected = false, pingOk = false)
+
+        assertEquals(HealthSummaryLogic.DbState.NOT_CONNECTED, state)
+        assertEquals(Severity.CRITICAL, state.severity, "silently not persisting is not ok")
+        assertEquals("not_connected", state.wire)
+    }
+
+    @Test
+    fun `no configured database is healthy because it is deliberate`() {
+        val state = HealthSummaryLogic.dbState(configured = false, connected = false, pingOk = false)
+
+        assertEquals(HealthSummaryLogic.DbState.ABSENT, state)
+        assertEquals(Severity.OK, state.severity, "in-memory by design is not a fault")
+    }
+
+    @Test
+    fun `configured and connected is only healthy if the ping answers`() {
+        assertEquals(
+            HealthSummaryLogic.DbState.REACHABLE,
+            HealthSummaryLogic.dbState(configured = true, connected = true, pingOk = true)
+        )
+        assertEquals(
+            HealthSummaryLogic.DbState.UNREACHABLE,
+            HealthSummaryLogic.dbState(configured = true, connected = true, pingOk = false),
+            "a running pool that cannot answer SELECT 1 is the Jun 2026 zombie API"
+        )
+    }
+
+    @Test
+    fun `the db cause says which of the two not-connected states it is`() {
+        val (sev, cause) = HealthSummaryLogic.dbCause(HealthSummaryLogic.DbState.NOT_CONNECTED)
+        assertEquals(Severity.CRITICAL, sev)
+        assertEquals("not_connected", cause.observed)
+        assertTrue(
+            cause.threshold.contains("not persisting"),
+            "the cause must say the app is not persisting, got: ${cause.threshold}"
+        )
+
+        val (absentSev, absent) = HealthSummaryLogic.dbCause(HealthSummaryLogic.DbState.ABSENT)
+        assertEquals(Severity.OK, absentSev)
+        assertEquals("absent", absent.observed)
+        assertTrue(
+            absent.threshold.contains("in-memory by design"),
+            "an absent database is a configuration, not a fault: ${absent.threshold}"
+        )
+    }
+
     // ---------- aggregation ----------
 
     @Test
     fun `overall severity is the worst cause`() {
         val causes = listOf(
-            HealthSummaryLogic.dbCause(true),
+            HealthSummaryLogic.dbCause(HealthSummaryLogic.DbState.REACHABLE),
             HealthSummaryLogic.upstreamCause("noaa", "error"),
         )
         assertEquals("degraded", HealthSummaryLogic.aggregate(causes, "t").severity)
 
-        val withCritical = causes + HealthSummaryLogic.dbCause(false)
+        val withCritical = causes +
+            HealthSummaryLogic.dbCause(HealthSummaryLogic.DbState.UNREACHABLE)
         assertEquals("critical", HealthSummaryLogic.aggregate(withCritical, "t").severity)
     }
 
     @Test
     fun `all ok aggregates to ok`() {
-        val causes = listOf(HealthSummaryLogic.dbCause(true))
+        val causes = listOf(HealthSummaryLogic.dbCause(HealthSummaryLogic.DbState.REACHABLE))
         assertEquals("ok", HealthSummaryLogic.aggregate(causes, "t").severity)
     }
 

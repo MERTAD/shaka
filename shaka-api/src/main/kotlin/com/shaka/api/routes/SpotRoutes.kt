@@ -35,6 +35,8 @@ import com.shaka.service.SpotService
 import com.shaka.service.ForecastService
 import com.shaka.service.HealthService
 import com.shaka.service.WeatherTileService
+import com.shaka.monitoring.HealthSummaryLogic
+import com.shaka.monitoring.Severity
 import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.request.*
@@ -234,6 +236,34 @@ private suspend fun io.ktor.server.application.ApplicationCall.respondWithDeadli
 }
 
 /**
+ * The single DB health probe behind `/health` and `/health/summary`.
+ *
+ * Both used to ask only `isConnected()` and treat false as "in-memory mode,
+ * nothing to ping". That is indistinguishable from a configured database whose
+ * connection failed, so a deployment with bad credentials reported itself
+ * healthy while `tryInitDatabase` had already fallen back to memory and every
+ * write was being dropped. The decision itself lives in
+ * [HealthSummaryLogic.dbState] so it is testable without a database.
+ */
+private suspend fun dbHealthState(): HealthSummaryLogic.DbState {
+    val factory = com.shaka.data.db.DatabaseFactory
+    val configured = factory.isConfigured()
+    val connected = factory.isConnected()
+    // Only ever ping a pool that exists; an in-memory install has nothing to ask.
+    val pingOk = configured && connected && try {
+        kotlinx.coroutines.withTimeout(2000) {
+            factory.dbQuery {
+                org.jetbrains.exposed.sql.transactions.TransactionManager.current()
+                    .exec("SELECT 1") { rs -> rs.next() } ?: false
+            }
+        }
+    } catch (e: Exception) {
+        false
+    }
+    return HealthSummaryLogic.dbState(configured, connected, pingOk)
+}
+
+/**
  * @param pfzService injectable so route-level tests can exercise the PFZ
  *   endpoints without a live Copernicus corridor. Defaults to the real
  *   service, so the production wiring is unchanged; the parameter exists
@@ -258,27 +288,24 @@ fun Application.configureRouting(
              * Postgres (Jun 2026 outage: pool exhausted, requests blocked
              * forever while this endpoint kept returning ok) makes Railway
              * restart/alert instead of serving a zombie API.
+             *
+             * A database that was configured but never connected is reported as
+             * a failure too. It used to be reported as ok, because the only
+             * test was `isConnected()` and that is equally false when nothing
+             * was configured — so a deployment with a bad password stayed
+             * green while running in-memory and dropping every write.
              */
             get("/health") {
-                val dbOk = if (!com.shaka.data.db.DatabaseFactory.isConnected()) {
-                    true  // in-memory mode (no DATABASE_URL): nothing to ping
-                } else try {
-                    kotlinx.coroutines.withTimeout(2000) {
-                        com.shaka.data.db.DatabaseFactory.dbQuery {
-                            org.jetbrains.exposed.sql.transactions.TransactionManager.current()
-                                .exec("SELECT 1") { rs -> rs.next() } ?: false
-                        }
-                    }
-                } catch (e: Exception) {
-                    false
-                }
-                if (dbOk) {
-                    call.respond(mapOf("status" to "ok", "service" to "shaka-api", "db" to "ok"))
+                val state = dbHealthState()
+                val body = mapOf(
+                    "status" to if (state.severity == Severity.OK) "ok" else "unhealthy",
+                    "service" to "shaka-api",
+                    "db" to state.wire
+                )
+                if (state.severity == Severity.OK) {
+                    call.respond(body)
                 } else {
-                    call.respond(
-                        HttpStatusCode.ServiceUnavailable,
-                        mapOf("status" to "unhealthy", "service" to "shaka-api", "db" to "unreachable")
-                    )
+                    call.respond(HttpStatusCode.ServiceUnavailable, body)
                 }
             }
             
@@ -382,16 +409,8 @@ fun Application.configureRouting(
                 val causes = mutableListOf<Pair<com.shaka.monitoring.Severity, com.shaka.monitoring.HealthCause>>()
                 val schedulersDisabled = com.shaka.monitoring.MonitoringConfig.schedulersDisabled()
 
-                // 1. DB ping (bounded, same as /health)
-                val dbOk = if (!com.shaka.data.db.DatabaseFactory.isConnected()) true else try {
-                    kotlinx.coroutines.withTimeout(2000) {
-                        com.shaka.data.db.DatabaseFactory.dbQuery {
-                            org.jetbrains.exposed.sql.transactions.TransactionManager.current()
-                                .exec("SELECT 1") { rs -> rs.next() } ?: false
-                        }
-                    }
-                } catch (e: Exception) { false }
-                causes += logic.dbCause(dbOk)
+                // 1. DB ping (bounded, same probe as /health)
+                causes += logic.dbCause(dbHealthState())
 
                 // 2. Jobs: latest-run severity + missed-run detection
                 val runs = com.shaka.monitoring.MonitoringService.getAllLatestRuns()

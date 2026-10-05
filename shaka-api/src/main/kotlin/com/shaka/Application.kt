@@ -391,7 +391,12 @@ private fun Application.tryInitDatabase() {
         println("DATABASE_URL not set - using in-memory database")
         return
     }
-    
+
+    // Recorded before the attempt, not after: the point is to remember that a
+    // database was wanted even when connecting to it throws, which is the only
+    // way /health can tell a broken database from an absent one.
+    DatabaseFactory.markConfigured()
+
     try {
         val dbUser = System.getenv("DATABASE_USER") ?: ""
         val dbPassword = System.getenv("DATABASE_PASSWORD") ?: ""
