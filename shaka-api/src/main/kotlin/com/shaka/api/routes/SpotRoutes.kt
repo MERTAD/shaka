@@ -300,7 +300,10 @@ fun Application.configureRouting(
                 val body = mapOf(
                     "status" to if (state.severity == Severity.OK) "ok" else "unhealthy",
                     "service" to "shaka-api",
-                    "db" to state.wire
+                    // "ok" for both healthy states: monitoring/journeys.json T1
+                    // and the design doc assert db == "ok", so that word is a
+                    // published contract and not ours to rename here.
+                    "db" to HealthSummaryLogic.livenessDbValue(state)
                 )
                 if (state.severity == Severity.OK) {
                     call.respond(body)

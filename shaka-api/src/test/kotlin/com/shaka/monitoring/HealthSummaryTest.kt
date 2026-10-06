@@ -53,6 +53,31 @@ class HealthSummaryTest {
     }
 
     @Test
+    fun `liveness keeps reporting db ok for both healthy states`() {
+        // monitoring/journeys.json (T1) and docs/synthetic-monitor-design.md
+        // publish `db == "ok"` as the contract, and CI gates on `curl -sf`.
+        // Renaming the healthy word would fail the monitor on the fix.
+        assertEquals(
+            "ok",
+            HealthSummaryLogic.livenessDbValue(HealthSummaryLogic.DbState.REACHABLE)
+        )
+        assertEquals(
+            "ok",
+            HealthSummaryLogic.livenessDbValue(HealthSummaryLogic.DbState.ABSENT),
+            "in-memory by design is still a healthy liveness"
+        )
+        assertEquals(
+            "not_connected",
+            HealthSummaryLogic.livenessDbValue(HealthSummaryLogic.DbState.NOT_CONNECTED),
+            "the failure that used to be reported as ok needs its own word"
+        )
+        assertEquals(
+            "unreachable",
+            HealthSummaryLogic.livenessDbValue(HealthSummaryLogic.DbState.UNREACHABLE)
+        )
+    }
+
+    @Test
     fun `the db cause says which of the two not-connected states it is`() {
         val (sev, cause) = HealthSummaryLogic.dbCause(HealthSummaryLogic.DbState.NOT_CONNECTED)
         assertEquals(Severity.CRITICAL, sev)

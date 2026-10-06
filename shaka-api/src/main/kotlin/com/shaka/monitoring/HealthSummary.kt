@@ -84,6 +84,20 @@ object HealthSummaryLogic {
         else -> DbState.UNREACHABLE
     }
 
+    /**
+     * The `db` value on the liveness endpoint.
+     *
+     * Both healthy states report `"ok"`, deliberately. `monitoring/journeys.json`
+     * (T1) and `docs/synthetic-monitor-design.md` publish `db == "ok"` as the
+     * contract, and fixing a health lie is not a reason to rename a value that
+     * automation already asserts on — the monitor would fail on the fix. Only
+     * the previously indistinguishable failure gets a new word.
+     */
+    fun livenessDbValue(state: DbState): String = when (state) {
+        DbState.ABSENT, DbState.REACHABLE -> "ok"
+        else -> state.wire
+    }
+
     fun dbCause(state: DbState): Pair<Severity, HealthCause> {
         val expected = when (state) {
             DbState.ABSENT -> "no DATABASE_URL set; running in-memory by design"
