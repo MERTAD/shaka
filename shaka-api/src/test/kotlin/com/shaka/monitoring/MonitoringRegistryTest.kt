@@ -75,4 +75,43 @@ class MonitoringRegistryTest {
         val overlap = MonitoringConfig.registryExempt.intersect(MonitoringConfig.jobs.map { it.name }.toSet())
         assertTrue(overlap.isEmpty(), "Names both registered and exempt: $overlap")
     }
+
+    /**
+     * `scheduleJob` fires the first run after `initialDelayMs` and then every
+     * `intervalMs`. `deployGraceMs` has to agree with that, or a job that booted
+     * normally gets reported as a missed run while it is still legitimately
+     * waiting on its own first run.
+     *
+     * This used to add a whole extra `intervalMs` to the grace for any job that
+     * had not opted into `runImmediately`, matching a scheduler that also waited
+     * that extra interval. Both were wrong together: `satellite_prefetch` stated
+     * a 3-minute initial delay on a 6-hour interval and so neither ran nor
+     * reported for 6h03m after every deploy, leaving `/health/jobs` on a stale
+     * critical while the underlying data never refreshed.
+     */
+    @Test
+    fun `deploy grace never outlasts the scheduler's first run`() {
+        val offenders = MonitoringConfig.jobs
+            .filter { it.scheduledName != null }
+            .filter { MonitoringConfig.deployGraceMs(it) > it.initialDelayMs + it.maxRunMs }
+            .map { "${it.name}: grace=${MonitoringConfig.deployGraceMs(it)}ms > " +
+                "initialDelay=${it.initialDelayMs}ms + maxRun=${it.maxRunMs}ms" }
+        assertTrue(
+            offenders.isEmpty(),
+            "deployGraceMs outlasts the first run, so a healthy fresh boot reads as a missed run: $offenders"
+        )
+    }
+
+    @Test
+    fun `deploy grace does not swallow a whole interval`() {
+        val offenders = MonitoringConfig.jobs
+            .filter { it.scheduledName != null }
+            .filter { MonitoringConfig.deployGraceMs(it) >= it.intervalMs + it.maxRunMs }
+            .map { "${it.name}: grace=${MonitoringConfig.deployGraceMs(it)}ms >= interval+maxRun" }
+        assertTrue(
+            offenders.isEmpty(),
+            "deployGraceMs still includes a full interval, so a job scheduled to run early " +
+                "is treated as missing for that whole interval after every deploy: $offenders"
+        )
+    }
 }

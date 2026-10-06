@@ -30,7 +30,6 @@ object MonitoringConfig {
         val degradedBelow: Double,
         /** Success rate below this -> "critical". */
         val criticalBelow: Double,
-        val runImmediately: Boolean = false,
     )
 
     private const val HOUR = 3_600_000L
@@ -49,7 +48,7 @@ object MonitoringConfig {
         JobSpec(
             name = "hourly_swell_wind", scheduledName = "hourly_swell_wind_prefetch",
             initialDelayMs = 120_000, intervalMs = 6 * HOUR, maxRunMs = 2 * HOUR,
-            staleGateHours = 0, degradedBelow = 0.99, criticalBelow = 0.50, runImmediately = true,
+            staleGateHours = 0, degradedBelow = 0.99, criticalBelow = 0.50,
         ),
         JobSpec(
             name = "satellite_prefetch", scheduledName = "satellite_prefetch",
@@ -127,22 +126,22 @@ object MonitoringConfig {
         JobSpec(
             name = "tide_horizon_topup", scheduledName = "tide_horizon_topup",
             initialDelayMs = 420_000, intervalMs = 720 * HOUR, maxRunMs = 6_000_000,
-            staleGateHours = 0, degradedBelow = 0.95, criticalBelow = 0.50, runImmediately = true,
+            staleGateHours = 0, degradedBelow = 0.95, criticalBelow = 0.50,
         ),
         JobSpec(
             name = "mpa_prefetch", scheduledName = "mpa_prefetch",
             initialDelayMs = 900_000, intervalMs = 168 * HOUR, maxRunMs = 24 * HOUR,
-            staleGateHours = 168, degradedBelow = 0.90, criticalBelow = 0.30, runImmediately = true,
+            staleGateHours = 168, degradedBelow = 0.90, criticalBelow = 0.30,
         ),
         JobSpec(
             name = "weather_tile_pipeline", scheduledName = "weather_tile_pipeline",
             initialDelayMs = 30_000, intervalMs = 6 * HOUR, maxRunMs = 24 * HOUR,
-            staleGateHours = 0, degradedBelow = 1.00, criticalBelow = 0.99, runImmediately = true,
+            staleGateHours = 0, degradedBelow = 1.00, criticalBelow = 0.99,
         ),
         JobSpec(
             name = "fishing_intel_scrape", scheduledName = "fishing_intel_scrape",
             initialDelayMs = 300_000, intervalMs = 2 * HOUR, maxRunMs = 8 * HOUR,
-            staleGateHours = 0, degradedBelow = 0.80, criticalBelow = 0.30, runImmediately = true,
+            staleGateHours = 0, degradedBelow = 0.80, criticalBelow = 0.30,
         ),
         // Weekly anti-join cleanup of orphaned user-% rows (Q14 safety net).
         // Reports rows deleted; deletes never partially fail per-item, so the
@@ -150,7 +149,7 @@ object MonitoringConfig {
         JobSpec(
             name = "user_spot_orphan_sweep", scheduledName = "user_spot_orphan_sweep",
             initialDelayMs = 1_200_000, intervalMs = 168 * HOUR, maxRunMs = 1 * HOUR,
-            staleGateHours = 0, degradedBelow = 0.90, criticalBelow = 0.30, runImmediately = true,
+            staleGateHours = 0, degradedBelow = 0.90, criticalBelow = 0.30,
         ),
         // Daily PFZ zone history. Re-scores the (anchor, species, mode,
         // size_class) requests the API has actually been asked for and replaces
@@ -170,7 +169,7 @@ object MonitoringConfig {
         JobSpec(
             name = "pfz_zones_daily", scheduledName = "pfz_zones_daily",
             initialDelayMs = 600_000, intervalMs = 24 * HOUR, maxRunMs = 4 * HOUR,
-            staleGateHours = 0, degradedBelow = 0.90, criticalBelow = 0.30, runImmediately = true,
+            staleGateHours = 0, degradedBelow = 0.90, criticalBelow = 0.30,
         ),
     )
 
@@ -253,9 +252,17 @@ object MonitoringConfig {
     fun missedRunDegradedAfterMs(spec: JobSpec): Long = spec.intervalMs + spec.maxRunMs + HOUR
     fun missedRunCriticalAfterMs(spec: JobSpec): Long = 2 * (spec.intervalMs + spec.maxRunMs)
 
-    /** Deploy grace: suppress "missed run" until the job has had time to complete once. */
-    fun deployGraceMs(spec: JobSpec): Long =
-        spec.initialDelayMs + (if (spec.runImmediately) 0L else spec.intervalMs) + spec.maxRunMs
+    /**
+     * Deploy grace: suppress "missed run" until the job has had time to complete once.
+     *
+     * Must stay in step with `scheduleJob`, which now fires the first run after
+     * `initialDelayMs` alone. It used to add a whole extra `intervalMs` for any
+     * job that did not opt into `runImmediately`, so `satellite_prefetch` (3 min
+     * stated delay, 6h interval) first ran 6h03m after boot and never ran at all
+     * on a short-lived instance - leaving `/health/jobs` pinned to a stale
+     * critical while the data it described never refreshed.
+     */
+    fun deployGraceMs(spec: JobSpec): Long = spec.initialDelayMs + spec.maxRunMs
 
     /** Env flag: skip all scheduler registrations (CI contract test / local mode). */
     fun schedulersDisabled(): Boolean =

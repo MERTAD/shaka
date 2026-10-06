@@ -157,13 +157,18 @@ private fun Application.configureScheduledJobs() {
         initialDelayMs: Long,
         intervalMs: Long,
         maxRunMs: Long = intervalMs * 4,
-        runImmediately: Boolean = false,
         job: suspend () -> Unit
     ) {
         if (schedulersDisabled) return
         backgroundScope.launch {
+            // First run after initialDelayMs, then every intervalMs. This used to
+            // add `if (!runImmediately) delay(intervalMs)` before the loop, which
+            // silently overrode every non-immediate job's stated delay: a 3-min
+            // initialDelayMs on a 6h job meant 6h03m before its first run, so on
+            // Railway (restarts, scale-to-zero) it never ran and /health/jobs sat
+            // on a stale critical. initialDelayMs is the delay before the first
+            // run and nothing else; MonitoringConfig.deployGraceMs mirrors this.
             delay(initialDelayMs)
-            if (!runImmediately) delay(intervalMs)
             while (true) {
                 try {
                     logger.info("Running scheduled job: $name")
@@ -189,9 +194,7 @@ private fun Application.configureScheduledJobs() {
             name = scheduledName,
             initialDelayMs = spec.initialDelayMs,
             intervalMs = spec.intervalMs,
-            maxRunMs = spec.maxRunMs,
-            runImmediately = spec.runImmediately,
-            job = job,
+            maxRunMs = spec.maxRunMs,            job = job,
         )
     }
     
@@ -242,7 +245,7 @@ private fun Application.configureScheduledJobs() {
     // EVERY 6 HOURS (cadence owned by MonitoringConfig): Hourly swell + wind
     // series. Fetches the 7-day hourly curves for every spot via batched
     // multi-location Open-Meteo requests and persists one row per local_date.
-    // runImmediately=true so it also backfills on first boot after a deploy.
+    // initialDelayMs = 120s, so it also backfills on first boot after a deploy.
     // The current-hour value shown to users is derived in-memory from these
     // tables by the hourly tick below; quota math lives at the JobSpec.
     scheduleRegisteredJob("hourly_swell_wind_prefetch") {
@@ -252,7 +255,7 @@ private fun Application.configureScheduledJobs() {
     // HOURLY: Re-derive the current-hour swell + wind snapshot from the
     // in-memory series. Cheap (no DB/API) — just advances "now" through the day.
     // registryExempt: intentionally unmonitored (in-memory derive, no reportRun).
-    scheduleJob("hourly_snapshot_tick", initialDelayMs = 660_000, intervalMs = 3_600_000, maxRunMs = 300_000, runImmediately = true) {
+    scheduleJob("hourly_snapshot_tick", initialDelayMs = 660_000, intervalMs = 3_600_000, maxRunMs = 300_000) {
         prefetchJobs.deriveHourlySnapshots()
     }
 
@@ -308,12 +311,12 @@ private fun Application.configureScheduledJobs() {
     }
 
     // NIGHTLY: Tide chart cleanup (old rows). registryExempt: unmonitored cleanup.
-    scheduleJob("tide_chart_cleanup", initialDelayMs = 600_000, intervalMs = 86_400_000, runImmediately = true) {
+    scheduleJob("tide_chart_cleanup", initialDelayMs = 600_000, intervalMs = 86_400_000) {
         prefetchJobs.cleanupOldTideDays()
     }
 
     // NIGHTLY: Hourly swell/wind series cleanup (old rows). registryExempt: unmonitored cleanup.
-    scheduleJob("hourly_series_cleanup", initialDelayMs = 660_000, intervalMs = 86_400_000, runImmediately = true) {
+    scheduleJob("hourly_series_cleanup", initialDelayMs = 660_000, intervalMs = 86_400_000) {
         prefetchJobs.cleanupOldHourly()
     }
 
@@ -332,7 +335,7 @@ private fun Application.configureScheduledJobs() {
 
     // NIGHTLY: PFZ zone history retention sweep. registryExempt: unmonitored
     // cleanup, like the tide/swell row prunes.
-    scheduleJob("pfz_zone_history_cleanup", initialDelayMs = 900_000, intervalMs = 86_400_000, runImmediately = true) {
+    scheduleJob("pfz_zone_history_cleanup", initialDelayMs = 900_000, intervalMs = 86_400_000) {
         pfzZonePersistJob.pruneOldHistory()
     }
 

@@ -57,12 +57,12 @@ class LandWaterClient(
         }
 
         return try {
-            // Be respectful to the free service.
-            try {
-                RateLimiters.landWater.acquire(timeoutMs = REQUEST_TIMEOUT_MS)
-            } catch (_: Exception) {
-                // best-effort
-            }
+            // Be respectful to the free service. tryAcquire reports whether the
+            // token actually arrived; ignoring that made this call hammer the
+            // endpoint at a 1320% throttle rate. On timeout we return null,
+            // which is the documented "unknown" answer, rather than issuing a
+            // request we already know we are not allowed to make yet.
+            if (!RateLimiters.landWater.acquireWithin(REQUEST_TIMEOUT_MS)) return null
 
             val url = "${baseUrl.trimEnd('/')}/${lat}/${lon}"
             val result = withTimeoutOrNull(REQUEST_TIMEOUT_MS) {

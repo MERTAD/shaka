@@ -37,17 +37,46 @@ class RateLimiter(
     private val throttledRequests = AtomicLong(0)
     
     /**
-     * Acquire a token, blocking if necessary until one is available.
-     * 
+     * Acquire a token, blocking until one is available.
+     *
+     * Returns Unit on purpose. This used to return a Boolean that every caller
+     * discarded, which is exactly how `LandWaterClient` ended up ignoring a
+     * timeout and issuing the request it had just been told to skip. A caller
+     * that genuinely cannot wait must say so by calling [acquireWithin] and
+     * handling the false.
+     */
+    suspend fun acquire() {
+        acquireWithin(timeoutMs = 0)
+    }
+
+    /**
+     * Acquire a token, blocking up to [timeoutMs], giving up if it does not arrive.
+     *
+     * Distinct from [tryAcquire], which never blocks at all: the name difference
+     * between "never blocks" and "blocks for up to N" is exactly the distinction
+     * that got dropped before.
+     *
      * @param timeoutMs Maximum time to wait for a token (0 = wait forever)
      * @return true if token acquired, false if timed out
      */
-    suspend fun acquire(timeoutMs: Long = 0): Boolean {
+    suspend fun acquireWithin(timeoutMs: Long): Boolean {
         totalRequests.incrementAndGet()
         
         val startTime = System.currentTimeMillis()
         
         while (true) {
+            // Deadline is checked BEFORE taking a token, and the per-iteration
+            // sleep is clamped to whatever is left of it. Checking it only after
+            // a failed refill (as this did) made timeoutMs unenforceable
+            // whenever the wait for the next token exceeded it: the delay slept
+            // past the deadline, refill then handed over a token, and the caller
+            // got `true` long after it had promised to give up.
+            val remainingMs = if (timeoutMs > 0) timeoutMs - (System.currentTimeMillis() - startTime) else Long.MAX_VALUE
+            if (remainingMs <= 0) {
+                logger.warn("Rate limit timeout after ${timeoutMs}ms")
+                return false
+            }
+
             mutex.withLock {
                 refillTokens()
                 
@@ -57,12 +86,6 @@ class RateLimiter(
                 }
             }
             
-            // Check timeout
-            if (timeoutMs > 0 && System.currentTimeMillis() - startTime > timeoutMs) {
-                logger.warn("Rate limit timeout after ${timeoutMs}ms")
-                return false
-            }
-            
             // Calculate wait time until next token
             val waitMs = (1000.0 / requestsPerSecond).toLong().coerceAtLeast(10)
             throttledRequests.incrementAndGet()
@@ -70,8 +93,10 @@ class RateLimiter(
             if (throttledRequests.get() % 10 == 0L) {
                 logger.debug("Rate limited - waiting ${waitMs}ms (throttled ${throttledRequests.get()} times)")
             }
-            
-            delay(waitMs)
+
+            // Never sleep past the deadline, or the caller waits longer than the
+            // timeout it was promised before the false comes back.
+            delay(if (remainingMs == Long.MAX_VALUE) waitMs else waitMs.coerceAtMost(remainingMs))
         }
     }
     

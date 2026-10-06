@@ -552,7 +552,7 @@ class DataPrefetchJobs(
      * hour's predicted wind, keeping the swell table self-contained.
      */
     suspend fun prefetchHourlySwellWind() = withContext(Dispatchers.IO) {
-        // Deploy decoupling (Aug 2026): this job's runImmediately boot pass
+        // Deploy decoupling (Aug 2026): this job's boot pass
         // refetched a fresh Open-Meteo model run on EVERY push, so users saw
         // wind/swell numbers jump with each deploy (Avalon "5 SSW -> 3 WNW").
         // When the persisted series (restored at boot) is fresher than the
