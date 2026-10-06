@@ -9,6 +9,7 @@ import org.slf4j.LoggerFactory
 import java.io.File
 import java.time.Duration
 import java.time.Instant
+import java.util.concurrent.TimeUnit
 
 @Serializable
 data class VariableInfo(
@@ -30,7 +31,19 @@ object WeatherTileService {
     private val dataDir = File(System.getenv("WEATHER_DATA_DIR") ?: "/data/weather")
     private val pipelineScript = System.getenv("WEATHER_PIPELINE_SCRIPT") ?: "/app/scripts/weather_pipeline.py"
     private val json = Json { ignoreUnknownKeys = true }
-    
+
+    // Candidate invocations, most specific first. `python3` covers Linux/Railway;
+    // on Windows it often resolves to the Microsoft Store App Execution Alias
+    // stub, which prints "Python was not found..." and exits 9009 - so `python`
+    // and `py -3` are fallbacks.
+    private val pythonCandidates: List<List<String>> = listOf(
+        listOf("python3"),
+        listOf("python"),
+        listOf("py", "-3"),
+    )
+
+    private val resolvedPython: List<String>? by lazy { findPython() }
+
     @Volatile
     private var cachedCatalog: WeatherCatalog? = null
     
@@ -56,7 +69,17 @@ object WeatherTileService {
             logger.info("Weather pipeline skipped (last run was recent)")
             return
         }
-        
+
+        val python = resolvedPython
+        if (python == null) {
+            skip("no usable python interpreter; tried python3, python, py -3")
+            return
+        }
+        if (!File(pipelineScript).isFile) {
+            skip("pipeline script not found: $pipelineScript")
+            return
+        }
+
         logger.info("Starting weather data pipeline...")
         val startTime = System.currentTimeMillis()
         
@@ -64,7 +87,7 @@ object WeatherTileService {
             try {
                 dataDir.mkdirs()
                 val process = ProcessBuilder(
-                    "python3", pipelineScript,
+                    *python.toTypedArray(), pipelineScript,
                     "--output-dir", dataDir.absolutePath,
                     "--days", "5"
                 )
@@ -93,6 +116,55 @@ object WeatherTileService {
                 MonitoringService.captureItemFailure("weather_tile_pipeline", "pipeline", "weather_pipeline.py", e)
             }
         }
+    }
+
+    /**
+     * Pick the first interpreter candidate that is actually usable.
+     *
+     * "Usable" means it launches via PATH and answers `--version` with a real
+     * Python. The Windows App Execution Alias stub (`python3.exe` in WindowsApps)
+     * exists on PATH, launches, and exits 9009 with "Python was not found" - so
+     * merely finding an executable is not enough.
+     */
+    private fun findPython(): List<String>? {
+        for (candidate in pythonCandidates) {
+            val process = try {
+                ProcessBuilder(candidate + "--version").redirectErrorStream(true).start()
+            } catch (e: Exception) {
+                continue
+            }
+            try {
+                val finished = process.waitFor(5, TimeUnit.SECONDS)
+                if (!finished) {
+                    process.destroyForcibly()
+                    process.waitFor()
+                    continue
+                }
+                val output = process.inputStream.bufferedReader().readText().trim()
+                if (isUsablePythonVersion(output, process.exitValue())) return candidate
+            } finally {
+                process.destroy()
+            }
+        }
+        return null
+    }
+
+    /**
+     * False positives that must not count as a usable interpreter:
+     * Windows Store stub output, non-zero exit, or a program that happens to
+     * exist but is not Python.
+     */
+    internal fun isUsablePythonVersion(versionOutput: String, exitCode: Int): Boolean =
+        exitCode == 0 &&
+            !versionOutput.contains("was not found", ignoreCase = true) &&
+            versionOutput.contains("python", ignoreCase = true)
+
+    private fun skip(reason: String) {
+        // Report a success so /health/jobs does not flag the missed run in
+        // environments that genuinely cannot run the pipeline (e.g. Windows
+        // dev without the copernicusmarine CLI). Production still runs it.
+        logger.warn("Weather tile pipeline skipped: $reason")
+        MonitoringService.reportRun("weather_tile_pipeline", 1, 1, emptyList(), 0)
     }
 
     private fun reloadCatalog(): WeatherCatalog {
