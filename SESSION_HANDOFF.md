@@ -132,11 +132,12 @@ device.
 | `7558cbc` | `scheduleJob` first run now fires at `initialDelayMs` (old code added `intervalMs`); `runImmediately` flag deleted. `RateLimiter.acquire()`→`Unit`, added `acquireWithin(timeoutMs)`; deadline enforced before token |
 | `3e4a2e8` | **Copernicus WMTS retry** (see §6) |
 | `fdc4dfa` | Session handoff doc (this file) |
-| `9bcfda3` | **weather_tile_pipeline benign skip** (see §6.1) — current HEAD |
+| `9bcfda3` | **weather_tile_pipeline benign skip** (see §6.1) |
+| `0ec27a8` | **Merge `fix/init-sql-gist-index`** (see §6.2) — current HEAD |
 
 Push target is the **fork**: `https://github.com/MERTAD/shaka.git`. Upstream is
 `origin` = `mikewards/shaka` (push denied: 403 — user declined collaborating
-upstream). Local `main` == `fork/main`. Local `main` is **24 commits ahead** of
+upstream). Local `main` == `fork/main`. Local `main` is **27 commits ahead** of
 `origin/main` (expected; we never push there).
 
 Unmerged branch: `fix/init-sql-gist-index` (44a2ea6) — fixes a GIST expression
@@ -178,6 +179,28 @@ NRT ~1-2 day latency), and fallback day (10-04) has no coverage at those
 pixels. 0 network errors, 0 credential issues. **CDSE OAuth credentials are
 irrelevant to `satellite_copernicus`.** Decision (open, see §8): should honest
 `no_data` count as a BREACH failure at all?
+
+## 6.2 Latest work — db init.sql GIST fix (merge `0ec27a8`)
+
+`db/init.sql` had a broken spatial index that killed any PostGIS container on
+first cold start:
+
+```sql
+-- before (Postgres: syntax error at or near "::")
+GIST ( ST_SetSRID(ST_MakePoint(longitude, latitude), 4326)::geography )
+-- after
+GIST ( ((ST_SetSRID(ST_MakePoint(longitude, latitude), 4326))::geography) )
+```
+
+An expression inside `CREATE INDEX ... USING GIST (...)` must be wrapped in its
+own parens BEFORE the `::type` cast, otherwise Postgres rejects it. The branch
+`fix/init-sql-gist-index` (44a2ea6) fixed it and decoupled CI's comment about
+it; merged into `main` as `0ec27a8`.
+
+**Validated**: threw up a scratch `postgis/postgis:16-3.4` on port 5499 with
+`init.sql` mounted → container survived cold start, `pg_isready` accepting, and
+`fishing_intel_report_geos_location_idx` exists; 789 spots seeded. Container
+removed after validation.
 
 ## 7. Background jobs, monitoring contracts, gotchas
 
@@ -250,8 +273,8 @@ script not found: /app/scripts/weather_pipeline.py".
    not runnable; Railway still runs it).
 4. **Coverage accounting**: should honest `no_data` count toward BREACH? If yes
    to change, must update journeys.json/tests (published contract).
-5. **`fix/init-sql-gist-index`** (44a2ea6) unmerged — worth merging into main;
-   also makes the weather `satellite_sst`-style data-gap questions comparable.
+5. **`fix/init-sql-gist-index`** — ~~unmerged~~ **done** in merge `0ec27a8`
+   (see §6.2).
 6. **Upstream**: user declined collaborating on `mikewards/shaka`; push to
    `fork` only.
 
