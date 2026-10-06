@@ -81,7 +81,7 @@ shaka/
 ```powershell
 $env:JAVA_HOME = "C:\Program Files\Eclipse Adoptium\jdk-21.0.3.9-hotspot"
 cd shaka-api
-.\gradlew.bat test --console=plain          # 282 tests / 22 suites / 17 DB-gated skips . 0 failures
+.\gradlew.bat test --console=plain          # 286 tests / 23 suites / 17 DB-gated skips / 0 failures
 .\gradlew.bat run --console=plain           # starts on :8080
 ```
 
@@ -118,7 +118,7 @@ Health check: `http://localhost:8080/v1/health` (NOT `/health` — that 404s).
 ### PFZ v2 (feature complete)
 Persistence + scheduled rescoring + retention/monitoring + history/trends +
 species registry + live Copernicus scoring + Flutter gap-aware history/GPX
-export. Flutter 107/107, backend 277→282 tests green, Android verified on
+export. Flutter 107/107, backend 277→286 tests green, Android verified on
 device.
 
 ### Background-job & health reliability (all committed & pushed to fork)
@@ -130,11 +130,13 @@ device.
 | `790df3d` | Health fix: `DbState` = `ABSENT/REACHABLE/NOT_CONNECTED/UNREACHABLE`; shared `dbHealthState()` probe; wrong-password → 503 `not_connected` |
 | `c5df056` | `livenessDbValue`: both healthy states report `db:"ok"` (keeps journeys.json/CI contract) |
 | `7558cbc` | `scheduleJob` first run now fires at `initialDelayMs` (old code added `intervalMs`); `runImmediately` flag deleted. `RateLimiter.acquire()`→`Unit`, added `acquireWithin(timeoutMs)`; deadline enforced before token |
-| `3e4a2e8` | **Copernicus WMTS retry** (see §6) — current HEAD |
+| `3e4a2e8` | **Copernicus WMTS retry** (see §6) |
+| `fdc4dfa` | Session handoff doc (this file) |
+| `9bcfda3` | **weather_tile_pipeline benign skip** (see §6.1) — current HEAD |
 
 Push target is the **fork**: `https://github.com/MERTAD/shaka.git`. Upstream is
 `origin` = `mikewards/shaka` (push denied: 403 — user declined collaborating
-upstream). Local `main` == `fork/main`. Local `main` is **22 commits ahead** of
+upstream). Local `main` == `fork/main`. Local `main` is **24 commits ahead** of
 `origin/main` (expected; we never push there).
 
 Unmerged branch: `fix/init-sql-gist-index` (44a2ea6) — fixes a GIST expression
@@ -212,12 +214,31 @@ irrelevant to `satellite_copernicus`.** Decision (open, see §8): should honest
 | satellite_copernicus | 368/789 | honest no_data (see §6) |
 | fishing_intel / mpa / pfz | 789/789 | ok |
 
-Two pre-existing BREACHes at this boot (present before too, NOT from the retry
-commit):
+Two pre-existing BREACHes appeared at that boot:
 - `weather_tile_pipeline`: exit 9009 — Windows App-Execution-Alias `python`
-  stub resolves before `C:\Python313\python.exe` (stub = "Python was not found;
-  run without arguments to install from the Microsoft Store").
+  stub resolves before the real interpreter. **Fixed in `9bcfda3`** (see §6.1).
 - `hourly_swell_wind`: 87.3% — 100 spots "Open-Meteo weather hourly unavailable".
+
+## 6.1 Latest work — weather_tile_pipeline skip (commit `9bcfda3`)
+
+`WeatherTileService.runPipeline` launched `ProcessBuilder("python3", ...)`. On
+Windows, `python3` resolves to the Microsoft Store App Execution Alias stub
+which exits 9009 with "Python was not found..." — and the default script path
+`/app/scripts/weather_pipeline.py` + `/data/weather` are Linux/Railway-only.
+The pipeline also needs the `copernicusmarine` CLI + numpy/xarray/PIL, so it
+cannot meaningfully run on a Windows dev box. Fix:
+
+- Robust interpreter resolution (`findPython`): try `python3`, `python`,
+  `py -3`; validate each with `--version` (exit 0 AND output looks like real
+  Python — rejects the stub). Result cached.
+- If no usable interpreter or the script file is missing → benign skip
+  (`reportRun` success, no BREACH, `/health/jobs` stays green) instead of
+  BREACH. Railway/Linux still executes the pipeline exactly as before.
+- `WeatherTileServiceTest` (4 tests) covers the stub/exit-output matrix.
+
+Live-verified at boot: `job_run event=job_run job=weather_tile_pipeline
+total=1 succeeded=1 ... status=OK` and "Weather tile pipeline skipped: pipeline
+script not found: /app/scripts/weather_pipeline.py".
 
 ## 8. Open decisions / pending items
 
@@ -225,10 +246,12 @@ commit):
    not yet confirmed).
 2. **Rotate Copernicus password** on the portal (leaked in `3753c38`). User
    writes new values manually into `shaka-api/.env.local`.
-3. **Weather pipeline python stub** (exit 9009) — local reliability fix.
+3. ~~Weather pipeline python stub~~ — **done** in `9bcfda3` (benign skip when
+   not runnable; Railway still runs it).
 4. **Coverage accounting**: should honest `no_data` count toward BREACH? If yes
    to change, must update journeys.json/tests (published contract).
-5. **`fix/init-sql-gist-index`** (44a2ea6) unmerged — worth merging into main.
+5. **`fix/init-sql-gist-index`** (44a2ea6) unmerged — worth merging into main;
+   also makes the weather `satellite_sst`-style data-gap questions comparable.
 6. **Upstream**: user declined collaborating on `mikewards/shaka`; push to
    `fork` only.
 
