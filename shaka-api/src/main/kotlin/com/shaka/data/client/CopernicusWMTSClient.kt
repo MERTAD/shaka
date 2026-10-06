@@ -70,6 +70,65 @@ class CopernicusWMTSClient {
     }
 
     /**
+     * True when the failure came from the transport rather than from an answer,
+     * so a second attempt is worth making.
+     *
+     * A 400 ("date not available yet") or a valid null payload is an answer and
+     * must not be retried - the date is not going to become available because we
+     * asked twice.
+     */
+    private fun isTransient(e: Exception): Boolean {
+        val message = e.message ?: return false
+        return message.contains("timeout", ignoreCase = true) ||
+            message.contains("connect", ignoreCase = true) ||
+            message.contains("connection reset", ignoreCase = true) ||
+            message.contains("broken pipe", ignoreCase = true)
+    }
+
+    /**
+     * Run [block] up to [MAX_RETRIES] times, backing off between attempts, and
+     * rethrow immediately if the failure is not a transport failure.
+     *
+     * MAX_RETRIES/INITIAL_BACKOFF_MS/MAX_BACKOFF_MS were declared for this and
+     * never called: there was no retry, despite the class doc claiming one. In
+     * one satellite run that left 14 visibility/chlorophyll requests dead -
+     * each one silently recorded as "no_data". Measured on this machine, a
+     * TCP connect to wmts.marine.copernicus.eu completes in 60-80ms, but
+     * roughly one in fifteen took 15156ms because the SYN was dropped and the
+     * kernel retransmitted with backoff - far past the shared client's 5s
+     * connectTimeout. Those arrive as exceptions and were recorded as
+     * "no_data", so a dropped SYN was reported to the user as "this water has
+     * no satellite coverage". The next connection almost always succeeds.
+     */
+    internal suspend fun <T> withRetry(
+        tag: String,
+        maxRetries: Int = MAX_RETRIES,
+        initialBackoffMs: Long = INITIAL_BACKOFF_MS,
+        maxBackoffMs: Long = MAX_BACKOFF_MS,
+        block: suspend () -> T,
+    ): T {
+        var backoff = initialBackoffMs
+        var lastError: Exception? = null
+
+        for (attempt in 1..maxRetries) {
+            try {
+                return block()
+            } catch (e: Exception) {
+                if (!isTransient(e)) throw e
+                lastError = e
+                if (attempt == maxRetries) break
+                logger.debug(
+                    "$tag attempt $attempt failed transiently (${e.message}); retrying in ${backoff}ms"
+                )
+                delay(backoff)
+                backoff = (backoff * 2).coerceAtMost(maxBackoffMs)
+            }
+        }
+
+        throw lastError ?: IllegalStateException("$tag failed without a cause")
+    }
+
+    /**
      * Get real underwater visibility (Secchi disk depth) for a location.
      * Returns visibility in METERS - this is actual measured data, not an estimate!
      * 
@@ -83,9 +142,12 @@ class CopernicusWMTSClient {
         RateLimiters.copernicus.acquire()
         
         return try {
-            // Circuit breaker - fail fast if API is down
+            // Circuit breaker - fail fast if API is down. The retry sits inside
+            // the breaker so a dropped SYN that succeeds on the second attempt
+            // does not count toward opening the circuit; only a request that
+            // stays dead through all attempts does.
             circuitBreaker.execute {
-                fetchVisibility(lat, lon, date)
+                withRetry("visibility") { fetchVisibility(lat, lon, date) }
             }
         } catch (e: CircuitBreakerOpenException) {
             logger.debug("Circuit breaker open for Copernicus WMTS - skipping request")
@@ -207,7 +269,7 @@ class CopernicusWMTSClient {
         
         return try {
             circuitBreaker.execute {
-                fetchChlorophyll(lat, lon, date)
+                withRetry("chlorophyll") { fetchChlorophyll(lat, lon, date) }
             }
         } catch (e: CircuitBreakerOpenException) {
             logger.debug("Circuit breaker open for Copernicus WMTS - skipping chlorophyll request")
