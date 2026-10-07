@@ -843,7 +843,7 @@ data class SubsetRunResult(
 
 /** Spawns the real `copernicusmarine subset` process. */
 class CopernicusSubsetProcess(
-    private val timeoutMs: Long = 180_000
+    private val timeoutMs: Long = 300_000
 ) : CopernicusSubsetRunner {
     override fun run(
         command: List<String>,

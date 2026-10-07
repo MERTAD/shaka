@@ -10,6 +10,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withTimeoutOrNull
 import java.time.LocalDate
 import java.time.temporal.ChronoUnit
+import kotlin.coroutines.cancellation.CancellationException
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.atan2
@@ -144,22 +145,90 @@ class PfzGridService(
      * honestly null where the grid could not resolve.
      */
     suspend fun analyzeZones(lat: Double, lon: Double, requested: LocalDate): PfzZoneAnalysis {
-        val analysis = withTimeoutOrNull(ANALYZE_TIMEOUT_MS) {
-            val (frontGrids, benthicGrids, monthlyGrids) = coroutineScope {
-                // Same three batches as the spot corridor: front fields, benthic
-                // plus daily SSH, and the monthly mean the anomaly is differenced
-                // against. One request per dataset, not one per factor.
-                val front = async { source.fetchGrids(FRONT_FIELDS, lat, lon, requested) }
-                val benthic = async { source.fetchGrids(BENTHIC_FIELDS, lat, lon, requested) }
-                val monthly = async { source.fetchGrids(listOf(CopernicusField.SSH_MONTHLY), lat, lon, requested) }
-                Triple(front.await(), benthic.await(), monthly.await())
+        return coroutineScope {
+            // The front fields are the anchor: SST/SSTA/CHL are what carve the
+            // patches, so that batch owns the whole analysis budget. A cold
+            // first scan of a region can legitimately take minutes of download,
+            // and this deadline is the one that must hold for a zone to exist
+            // at all.
+            val front = async {
+                try {
+                    withTimeoutOrNull(ZONE_ANALYZE_TIMEOUT_MS) {
+                        source.fetchGrids(FRONT_FIELDS, lat, lon, requested)
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    emptyMap()
+                }
             }
+
+            // Enrichment (benthic plus the monthly mean the anomaly is
+            // differenced against) makes a score richer — depth, bottom
+            // temperature, SSH anomaly — but it is not what segments a zone.
+            // Giving it its own shorter budget and continuing without it is
+            // deliberate: a zone anchored only to the front is a weaker
+            // measurement, not a lie, and "return zones even when the
+            // enrichment products are slow" is exactly what a coast whose
+            // scores are weak needs. Each batch gets one subprocess run per
+            // dataset, not one per factor.
+            val benthic = async {
+                try {
+                    withTimeoutOrNull(ZONE_ENRICH_TIMEOUT_MS) {
+                        source.fetchGrids(BENTHIC_FIELDS, lat, lon, requested)
+                    } ?: emptyMap()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    emptyMap()
+                }
+            }
+            val monthly = async {
+                try {
+                    withTimeoutOrNull(ZONE_ENRICH_TIMEOUT_MS) {
+                        source.fetchGrids(listOf(CopernicusField.SSH_MONTHLY), lat, lon, requested)
+                    } ?: emptyMap()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    emptyMap()
+                }
+            }
+
+            // A null front batch is the one genuinely timed-out outcome: no
+            // measurement of the sea arrived at all, so there is nothing honest
+            // to zone. Returning here cancels the still-running enrichment
+            // fetches (they are children of this scope).
+            val frontGrids = front.await()
+                ?: return@coroutineScope PfzZoneAnalysis.Empty(
+                    PfzZoneEmptyReason.TIMED_OUT, pointResolved = false
+                )
+            val benthicGrids = benthic.await()
+            val monthlyGrids = monthly.await()
+
+            analyzeZonesFromGrids(frontGrids, benthicGrids, monthlyGrids, lat, lon, requested)
+        }
+    }
+
+    /**
+     * Segment patches and rank them from grids that already arrived. This is
+     * the shared body of [analyzeZones]; it never fetches and never times out,
+     * so it takes whatever the batches produced, including only the front.
+     */
+    private suspend fun analyzeZonesFromGrids(
+        frontGrids: Map<CopernicusField, CopernicusGrid>,
+        benthicGrids: Map<CopernicusField, CopernicusGrid>,
+        monthlyGrids: Map<CopernicusField, CopernicusGrid>,
+        lat: Double,
+        lon: Double,
+        requested: LocalDate
+    ): PfzZoneAnalysis {
             val sstGrid = frontGrids[CopernicusField.SST]
             val sstaGrid = frontGrids[CopernicusField.SSTA]
             val chlGrid = frontGrids[CopernicusField.CHL]
 
             val anchor = sstGrid ?: chlGrid ?: sstaGrid
-                ?: return@withTimeoutOrNull PfzZoneAnalysis.Empty(
+                ?: return PfzZoneAnalysis.Empty(
                     PfzZoneEmptyReason.NO_GRID, pointResolved = false
                 )
             // Whether the caller's own cell carries data is a different question
@@ -190,7 +259,7 @@ class PfzGridService(
                 }
             }
             if (cells.isEmpty()) {
-                return@withTimeoutOrNull PfzZoneAnalysis.Empty(
+                return PfzZoneAnalysis.Empty(
                     PfzZoneEmptyReason.NO_PATCHES, pointResolved
                 )
             }
@@ -234,19 +303,25 @@ class PfzGridService(
                     )
                 }
 
-            if (chosen.isEmpty()) {
+            return if (chosen.isEmpty()) {
                 PfzZoneAnalysis.Empty(PfzZoneEmptyReason.NO_PATCHES, pointResolved)
             } else {
                 PfzZoneAnalysis.Resolved(chosen, pointResolved)
             }
-        }
-        // A deadline that expired is not an absence of data. This used to
-        // collapse into the same emptyList() as a genuinely featureless sea, so
-        // a cold fetch that ran long was reported to the caller as "no zones
-        // today" — indistinguishable from a real no-data day, and therefore
-        // impossible to tell apart from one in production.
-        return analysis ?: PfzZoneAnalysis.Empty(PfzZoneEmptyReason.TIMED_OUT, pointResolved = false)
     }
+
+    /**
+     * Pre-fetch the front fields for one anchor/date into the grid cache, for
+     * the job that keeps a populated area warm ahead of user requests. Returns
+     * the grids that arrived; enrichment is deliberately not fetched here,
+     * because the front is what segments zones and the job only guarantees
+     * that zones exist, not that every factor scores.
+     */
+    suspend fun warmFrontFields(
+        lat: Double,
+        lon: Double,
+        date: LocalDate
+    ): Map<CopernicusField, CopernicusGrid> = source.fetchGrids(FRONT_FIELDS, lat, lon, date)
 
     // ---------------------------------------------------------------- outcome
 
@@ -793,16 +868,36 @@ class PfzGridService(
         private const val KM_PER_DEG_LAT = 110.574
         private const val KM_PER_DEG_LON = 111.320
         /**
-         * Wall-clock budget for one analysis.
+         * Wall-clock budget for one spot-corridor analysis.
          *
-         * This has to clear [CopernicusGridClient]'s 180s per-dataset subprocess
-         * timeout, or a single slow dataset can never finish and every cold area
-         * fails the budget by construction. A measured cold fetch of nine Med
-         * datasets over three parallel batches ran 106-131s, which the previous
-         * 120s cap straddled: the same request succeeded or reported "no data"
-         * depending on which side of the line the download happened to land.
+         * Has to stay under the zone budget: the spot path answers a Conditions
+         * tab, where a long wait is a long wait. Even below
+         * [CopernicusGridClient]'s 300s per-dataset subprocess timeout, a
+         * single slow dataset is still cut at this analysis deadline, which is
+         * the intended bound.
          */
         private const val ANALYZE_TIMEOUT_MS = 240_000L
+
+        /**
+         * Wall-clock budget for the *front* fields of one zone analysis.
+         *
+         * This is deliberately longer than [ANALYZE_TIMEOUT_MS] (the spot
+         * corridor): zones are the offshore-target feature, where a slow first
+         * scan of a region is more honest than "no zones" and the cache makes
+         * every later request cheap. It has to clear [CopernicusGridClient]'s
+         * per-subset process timeout or a single slow product can never finish
+         * inside the budget by construction.
+         */
+        private const val ZONE_ANALYZE_TIMEOUT_MS = 420_000L
+
+        /**
+         * Best-effort budget for the enrichment fields (benthic + monthly
+         * anomaly). Missing enrichment weakens a score but does not void the
+         * zone, so this lives strictly under [ZONE_ANALYZE_TIMEOUT_MS]: once
+         * the front has resolved, a slow benthic download must not keep the
+         * answer waiting.
+         */
+        private const val ZONE_ENRICH_TIMEOUT_MS = 300_000L
 
         /** Days between the two SST analyses differenced into dSST30. */
         private const val SST_TREND_DAYS = 30L

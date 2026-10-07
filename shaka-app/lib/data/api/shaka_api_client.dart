@@ -188,6 +188,11 @@ class ShakaApiClient {
           if (mode != null) 'mode': mode,
           if (sizeClass != null) 'sizeClass': sizeClass,
         },
+        // A cold first scan of a region downloads the Copernicus grids from
+        // scratch and can take several minutes; the backend's analysis deadline
+        // is 420s. The default 120s receive timeout would cut it before it
+        // ever answered. Subsequent scans hit the backend's grid cache.
+        options: Options(receiveTimeout: const Duration(seconds: 480)),
       );
       return PfzZonesResponse.fromJson(response.data as Map<String, dynamic>);
     } on DioException catch (e) {

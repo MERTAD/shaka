@@ -333,6 +333,16 @@ private fun Application.configureScheduledJobs() {
         pfzZonePersistJob.persistDaily()
     }
 
+    // ==================== PFZ ALGERIAN-COAST WARM CORRIDOR ====================
+    // Pre-fetches the front fields (SST/SSTA/CHL) for the primary Algerian
+    // coast so the first zone request there answers fast instead of paying for
+    // a cold download at the analysis deadline. Reports as pfz_corridor_warm.
+    val pfzCorridorWarmJob = com.shaka.pfz.PfzCorridorWarmJob()
+
+    scheduleRegisteredJob("pfz_corridor_warm") {
+        pfzCorridorWarmJob.warm()
+    }
+
     // NIGHTLY: PFZ zone history retention sweep. registryExempt: unmonitored
     // cleanup, like the tide/swell row prunes.
     scheduleJob("pfz_zone_history_cleanup", initialDelayMs = 900_000, intervalMs = 86_400_000) {

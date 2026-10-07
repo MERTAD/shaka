@@ -307,6 +307,39 @@ class PfzGridServiceTest {
     }
 
     @Test
+    fun `analyzeZones resolves zones from the front when the enrichment batch fails`() {
+        // The benthic and monthly batches must enrich a score, not gate the
+        // zone list. If they fail as a batch, the analysis still runs on the
+        // front fields that did arrive: a slow or dead enrichment product is
+        // a weaker score, not a missing zone list.
+        val sst = grid(CopernicusField.SST, cell = { i, _ -> i.toDouble() })
+        val chl = grid(CopernicusField.CHL, cell = { i, _ -> (i + 1) / 10.0 })
+        val throwing = object : PfzGridSource {
+            override suspend fun fetchGrid(
+                field: CopernicusField,
+                lat: Double,
+                lon: Double,
+                date: LocalDate
+            ): CopernicusGrid? {
+                if (field in PfzGridService.BENTHIC_FIELDS) {
+                    throw IllegalStateException("enrichment product down")
+                }
+                return when (field) {
+                    CopernicusField.SST -> sst
+                    CopernicusField.CHL -> chl
+                    else -> null
+                }
+            }
+
+            override suspend fun depthM(lat: Double, lon: Double): Double? = null
+        }
+
+        val analysis = analyzeZones(throwing)
+
+        assertTrue(analysis.zones.isNotEmpty(), "front-only analysis must still resolve zones")
+    }
+
+    @Test
     fun `a masked point cell is reported even when the window still yields zones`() {
         // The coast case: the caller's own cell is land-masked, but open water
         // inside the same window is measurable and must still be ranked. The

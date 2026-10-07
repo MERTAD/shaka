@@ -5,7 +5,7 @@ compresses the project, the environment, everything currently done, and the
 exact point we are at. Read this first, then `README.md`, then dig into
 `docs/` as needed.
 
-Last updated: 2026-10-06.
+Last updated: 2026-10-07.
 
 ---
 
@@ -201,6 +201,168 @@ it; merged into `main` as `0ec27a8`.
 `init.sql` mounted → container survived cold start, `pg_isready` accepting, and
 `fishing_intel_report_geos_location_idx` exists; 789 spots seeded. Container
 removed after validation.
+
+## 6.3 Latest work — Flutter Explore map crash fix + MVP walkthrough (Track A)
+
+Goal: validate the MVP on the physical phone (install latest debug APK, walk the
+core loop discover → score → evidence, hold a stable baseline).
+
+Connected device for this session is **`R5CWB0JZ73L` = Samsung SM-S901B
+(Galaxy S22, API 34)**, NOT the API-27 `46f866f5` recorded in §3/AGENTS.md.
+Local-backend targeting needs `adb reverse tcp:8080 tcp:8080` plus
+`--dart-define=SHAKA_API_BASE=http://localhost:8080` (origin only, no trailing
+slash; build-time config in `shaka-app/lib/core/config/app_config.dart:28`).
+
+**Blocking bug found & fixed — core loop crashed the app on spot selection.**
+- Repro: launch → map loads (`789 spots in 84ms`) → tap a carousel card / marker.
+- Symptom: `PlatformException(error, Source selected-spot-source already exists,
+  CannotAddSourceException)` then a **native SIGSEGV in `libmaplibre.so`**
+  (`MessageImpl<...GeoJSONData>::operator()`); process dies (Samsung logged
+  `appErrorCount=10`). So "open a spot" — the whole point of the app — killed it.
+- Root cause: `_updateSelectedMarker()` (`explore_screen.dart`) is `async` and
+  callable concurrently (carousel `onPageChanged`, camera-idle, marker tap). It
+  did `removeLayer` + `removeSource('selected-spot-source')` then `addSource`
+  with **no re-entrancy guard**; overlapping calls raced → "source already
+  exists" → native GL thread crash.
+- Fix: added a coalescing guard (`_selectedMarkerUpdating`/`_selectedMarkerDirty`)
+  so only one mutation runs at a time; split into `_updateSelectedMarker()`
+  (guard + rerun-once loop) and `_applySelectedMarker()`. When the source already
+  exists it now refreshes via `setGeoJsonSource` instead of remove/re-add churn;
+  tracks `_selectedSourceExists`, reset to `false` on style reload; failure path
+  tears the source down cleanly.
+- Validated: `flutter test` 107/107; rebuilt + reinstalled (APK 226.9 MB);
+  on device the app **stayed alive through 3× open-spot → back cycles**, no
+  `already exists`/SIGSEGV in logcat, Conditions tab rendered (Swell 2ft @ 11s S,
+  Wind 4 kts ENE, Water 81°F, Tide rising; SCORE BREAKDOWN Swell 65 / Wind 100 /
+  Visibility 65 / Solunar 55).
+
+**Non-bug robustness gap — map style DNS hang.** A transient inability to
+resolve `basemaps.cartocdn.com`/`tiles.basemaps.cartocdn.com` left the app stuck
+on "Loading spots…" (style never loaded, so markers never render). Recovered on
+retry; no style-load timeout/fallback. Worth hardening later, but environmental.
+
+**Known MVP caveat (not this fix):** `/v1/spots/all` returns `shakaScore: null`
+for all 789 spots because local `spot_cache` has no tide data (`tide_state` /
+`tide_height_ft` null; `tide_horizon_topup` job not run — needs the FES2022 tide
+service). Carousel cards therefore show `Loading...` for the score, but curated
+spots are still tappable and the detail route computes a score on demand
+(e.g. `mexico-espiritu-santo-north` → `{"overall":80,"confidence":95,...}`).
+
+## 6.4 Latest work — Top-PFZ-per-species overlay + species styling (Track A)
+
+Feature request (user): (1) fix freeze/crash on map navigate/zoom, (2) show the
+top PFZ target for every species on **all** maps (Explore, Charts, Results) —
+especially the Algerian coast, (3) make the selected/main spot icon larger and
+others smaller, (4) give each species its own colour + icon, defaulting to the
+best-scoring of the 8.
+
+**Marker-mutation crash fix (same class as §6.3).** The spots marker refresh
+(`_updateMarkers` in Explore, `_updateSpots`/`_addMarkers` in Charts/Results) had
+the identical unguarded `removeSource`+`addSource` race as the selected marker
+(reproduced crash). Now coalesced with `_updateMarkersInFlight`/`_updateMarkersPending`
+(and equivalents), refreshing via `setGeoJsonSource` when the source exists;
+`_spotsSourceExists` reset on style reload. Spot icons normalized to
+`iconSize: 0.65`; the selected spot uses `iconSize: 1.35`.
+
+**Per-species styling.** New registry
+`lib/core/species/species_style.dart` (`SpeciesStyle{id,label,color,icon}`,
+`kSpeciesStyles`, `speciesStyle(id)`, `speciesIds`) covers the 8 app species
+(`bluefin_tuna, little_tunny, swordfish, sardine, anchovy, horse_mackerel,
+scomber, european_hake`) with distinct Material icons + colours.
+`lib/presentation/utils/species_marker_painter.dart`
+(`generateSpeciesMarkerImage`) renders a white-ringed coloured circle with a
+knockout glyph to a PNG for MapLibre `addImage`.
+
+**Overlay implementation.**
+- `lib/data/services/pfz_overlay_service.dart` — `PfzOverlayZone` +
+  `PfzOverlayService.topZonesPerSpecies({lat,lon,date,perSpecies=1})`: queries
+  `getZones` for all 8 species in parallel, keeps each species' best scored zone,
+  caches per rounded anchor+date; failures/empty are normal (species omitted).
+- `lib/presentation/map/pfz_overlay_layer.dart` — `PfzOverlayLayer`
+  (source `pfz-overlay-source`, layer `pfz-overlay-layer`, image prefix
+  `pfz-species-`); serialised busy/pending guard so no two GL mutations overlap;
+  `show()/hide()/onStyleReset()`.
+- Wired into Explore (`explore_screen.dart`), Charts (`gibs_imagery_screen.dart`)
+  and Results (`results/map_view.dart`) with a `Icons.pin_drop` floating toggle
+  (active tint + loading spinner). `_latestPfzDate()` = yesterday UTC (Copernicus
+  NRT lag). Floating buttons now carry `Semantics(button:true,label:...)` so they
+  are targetable via `uiautomator` (and accessible).
+
+**Validated on `R5CWB0JZ73L`:** `flutter test` 107/107, `flutter analyze` clean
+(no errors). Explore PFZ toggle fires (`PFZ toggle tapped … zones resolved=…`),
+toggles on/off, survives pan + repeated double-tap zoom with **no SIGSEGV /
+libmaplibre crash**. Seeded 8 synthetic zones (debug-only compile flag
+`--dart-define=PFZ_SEED=true`, gated by `bool.fromEnvironment('PFZ_SEED')`):
+`PFZ overlay: drew 8 species targets`, and pixel-sampling confirmed a
+species-coloured marker (bluefin `#1E88E5`, 836 px) rendered on the GL surface.
+
+**Upstream blocker (not a app bug):** with a real (unseeded) build and no local
+cache, the overlay resolves `0` zones near the current center, and
+`GET /v1/pfz/zones` for a Mediterranean anchor (e.g. Algiers 36.75,3.06) makes
+the backend take ~350 s in the Copernicus Med grid fetch and then return an empty
+`zones` list with an honest `coverageNotes` explanation ("No Copernicus SST/SSTA/
+CHL grid resolved … the download failed"). `pfz_zones_daily` is empty (0 rows),
+so nothing is persisted for fast replay. The Algerian-coast requirement is
+therefore **data-gated**, not code-gated: the overlay renders whatever the
+backend scores; the backend needs the Copernicus Med fetch to complete within its
+deadline (retry once the corridor is cached), or gridded bathymetry for the
+hake/red-shrimp cases.
+
+## 6.5 Latest work — Algerian-coast coverage guarantee (backend, Track A)
+
+User directive: **"The main zones is the Algerian coast. You have to cover this
+zone even if the score is weak."** Root cause was NOT missing data — the
+Algerian coast is inside Copernicus Med coverage; an Algiers anchor cell is
+coast-masked so its zones are nearest resolved open water (honest note, kept).
+The real gap: a **cold** first scan of a coast anchor ran past the 240 s analysis
+deadline (measured cold Annaba 244.8 s then 249.9 s → 0 zones, `TIMED_OUT`), so
+the coast looked empty until its grids happened to be cached.
+
+**Design (why):** zone segmentation needs only the FRONT fields
+(SST/SSTA/CHL — one batched subset call); benthic depth/bottom-T/SSH + monthly
+mean SSH are *enrichment* — they make a score richer but never segment a zone.
+So a slow/dead enrichment batch must weaken a score, never void the zone list.
+
+Changes (all backend, plus one app timeout):
+- `PfzGridService.analyzeZones`: `coroutineScope` + one `async` per batch; the
+  front batch owns `ZONE_ANALYZE_TIMEOUT_MS = 420_000`, each enrichment batch
+  owns `ZONE_ENRICH_TIMEOUT_MS = 300_000`; `CancellationException` rethrown,
+  other `Exception` → `emptyMap()`. Only a null *front* yields
+  `PfzZoneEmptyReason.TIMED_OUT` (which cancels the still-running enrichment via
+  the enclosing scope). Shared body extracted to `analyzeZonesFromGrids`
+  (never fetches, never times out).
+- `CopernicusGridClient`: `CopernicusSubsetProcess` timeout 180 s → 300 s so
+  big products can finish and land in the 36 h CSV cache.
+- **New `PfzCorridorWarmJob`** (`pfz_corridor_warm`): on boot, after 3 min,
+  pre-fetches the FRONT fields for 7 Algerian-coast anchors (Oran, Mostaganem,
+  Algiers, Bejaia, Jijel, Skikda, Annaba), then every 12 h; `reportRun` +
+  `captureItemFailure` via MonitoringService; JobSpec in `MonitoringConfig`,
+  scheduled in `Application.kt`. `MonitoringRegistryTest` auto-enforces all three.
+- **App** `shaka_api_client.dart` `getZones`: 480 s `receiveTimeout` (backend
+  deadline 420 s; Dio default 120 s would give up first).
+- Tests: full backend suite 288/288 (incl. new "analyzeZones resolves zones from
+  the front when the enrichment batch fails" + `PfzCorridorWarmJobTest`);
+  `flutter test` 107/107, `flutter analyze` no new issues.
+
+**Live numbers on this machine (2026-10-07, new build):**
+- Warm Algiers (36.75,3.06, sardine): 48.6 s → 24 zones, pfz 92/89/89 (regression
+  clean vs pre-change).
+- Cold Cherchell (36.61,2.19 — a non-anchor point, nothing cached): **400.2 s →
+  24 zones, pfz 94/89/88** (would have hard-failed at 240 s before). Repeat
+  (cached): 26.8 s → 24 zones.
+- `pfz_corridor_warm` first run: 175.9 s, total=7, succeeded=7, status=OK.
+- Backend currently running with this code (log `shaka-api/run4.log`).
+
+**Known limits (accepted):** warm job covers only map centers within ±0.3° of the
+7 anchors; arbitrary coast points still get a cold (but now survivable) first
+request. Enrichment may be missing on the first cold scan (300 s budget) →
+scores weaker but zones present. `pfz_zones_daily` still only fills on
+request/persist; cache TTL is 36 h.
+**TODO (carry-over):** the app overlay feature files from §6.4 are still NOT in
+git (untracked: `pfz_overlay_service.dart`, `species_style.dart`,
+`species_marker_painter.dart`, `presentation/map/`, plus Explore/Charts/Results
+wiring) — commit them in a separate commit when ready. Junk `*.err`, `sc.png`,
+`screenshot.png`, `run2/3.err` also untracked — do not stage.
 
 ## 7. Background jobs, monitoring contracts, gotchas
 

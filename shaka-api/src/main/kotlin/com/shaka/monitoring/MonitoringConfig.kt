@@ -171,6 +171,14 @@ object MonitoringConfig {
             initialDelayMs = 600_000, intervalMs = 24 * HOUR, maxRunMs = 4 * HOUR,
             staleGateHours = 0, degradedBelow = 0.90, criticalBelow = 0.30,
         ),
+        // Keeps the primary Algerian-coast corridor's front fields cached. A
+        // warm box resolving nothing is a transient state (network or product
+        // hiccup), so the gates sit well below the daily persist job's.
+        JobSpec(
+            name = "pfz_corridor_warm", scheduledName = "pfz_corridor_warm",
+            initialDelayMs = 180_000, intervalMs = 12 * HOUR, maxRunMs = 2 * HOUR,
+            staleGateHours = 24, degradedBelow = 0.70, criticalBelow = 0.30,
+        ),
     )
 
     /**
